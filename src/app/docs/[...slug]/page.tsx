@@ -2,20 +2,21 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card';
 import { DocumentTree } from "@/components/document/DocumentTree";
 import WysiwygEditor from "@/components/editor/WysiwygEditor";
 import { initialDocumentsData, findDocument } from "@/config/docs";
 import type { DocumentNode } from "@/types/document";
 import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarTrigger, SidebarInset, SidebarRail, SidebarFooter } from "@/components/ui/sidebar";
 import { Button } from '@/components/ui/button';
-import { Save, PlusCircle, Edit, XCircle } from 'lucide-react';
+import { Save, PlusCircle, Edit, XCircle, Loader2 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from '@/components/ui/badge';
+import { useAuth } from '@/contexts/AuthContext';
 
 // Helper to simulate saving content
 const saveDocumentContent = async (documentId: string, content: string): Promise<boolean> => {
@@ -44,28 +45,40 @@ const saveDocumentContent = async (documentId: string, content: string): Promise
 export default function DocumentPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
+  const { currentUser, loading: authLoading } = useAuth();
   
   const [currentDocument, setCurrentDocument] = useState<DocumentNode | null>(null);
   const [editedContent, setEditedContent] = useState<string>('');
   const [allDocuments, setAllDocuments] = useState<DocumentNode[]>(initialDocumentsData);
   const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
   const documentId = params.slug ? (Array.isArray(params.slug) ? params.slug[params.slug.length -1] : params.slug) : null;
+  const currentPath = `/docs/${documentId || 'org1'}`;
 
   useEffect(() => {
-    if (documentId) {
-      const doc = findDocument(allDocuments, documentId);
-      setCurrentDocument(doc);
-      if (doc) {
-        setEditedContent(doc.content || '');
-      }
-      setIsEditing(false); // Reset to view mode when document changes
-    } else if (allDocuments.length > 0 && allDocuments[0].children && allDocuments[0].children[0].children && allDocuments[0].children[0].children[0]) {
-      const firstPageId = allDocuments[0].children[0].children[0].id;
-      router.push(`/docs/${firstPageId}`);
+    if (!authLoading && !currentUser) {
+      router.push(`/login?redirect=${encodeURIComponent(currentPath)}`);
     }
-  }, [documentId, allDocuments, router]);
+  }, [currentUser, authLoading, router, currentPath]);
+
+  useEffect(() => {
+    if (currentUser) { // Only process document logic if user is authenticated
+      if (documentId) {
+        const doc = findDocument(allDocuments, documentId);
+        setCurrentDocument(doc);
+        if (doc) {
+          setEditedContent(doc.content || '');
+        }
+        setIsEditing(false); // Reset to view mode when document changes
+      } else if (allDocuments.length > 0 && allDocuments[0]?.children?.[0]?.children?.[0]) {
+        const firstPageId = allDocuments[0].children[0].children[0].id;
+        router.push(`/docs/${firstPageId}`);
+      }
+    }
+  }, [documentId, allDocuments, router, currentUser]);
 
   const handleContentChange = useCallback((content: string) => {
     setEditedContent(content);
@@ -73,7 +86,9 @@ export default function DocumentPage() {
 
   const handleSaveContent = async () => {
     if (currentDocument) {
+      setIsSaving(true);
       const success = await saveDocumentContent(currentDocument.id, editedContent);
+      setIsSaving(false);
       if (success) {
         const updatedDocuments = allDocuments.map(org => ({
           ...org,
@@ -153,6 +168,17 @@ export default function DocumentPage() {
 
   const breadcrumbs = getBreadcrumbs(currentDocument?.id || null);
 
+  if (authLoading) {
+    return <div className="flex h-[calc(100vh-4rem)] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /> <span className="ml-2">Loading documents...</span></div>;
+  }
+
+  if (!currentUser) {
+    // This is mainly a fallback, the useEffect should redirect.
+    return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Redirecting to login...</div>;
+  }
+
+  const canEdit = currentUser.role === 'admin' || currentUser.role === 'editor';
+
   return (
     <SidebarProvider defaultOpen>
       <div className="flex h-[calc(100vh-4rem)]"> {/* Ensure full height below header */}
@@ -174,7 +200,7 @@ export default function DocumentPage() {
               />
             </ScrollArea>
           </SidebarContent>
-          {SidebarFooter && ( 
+          {canEdit && ( 
             <SidebarFooter className="group-data-[collapsible=icon]:hidden">
               <Button variant="outline" size="sm" className="w-full">
                 <PlusCircle className="mr-2 h-4 w-4" /> New Page
@@ -190,15 +216,15 @@ export default function DocumentPage() {
               {currentDocument && currentDocument.type === 'page' ? (
                 <Card className="w-full shadow-md">
                   <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                       <div className="space-y-1 flex-grow">
-                        <div className="text-sm text-muted-foreground mb-1">
+                        <div className="text-sm text-muted-foreground mb-1 flex flex-wrap items-center">
                           {breadcrumbs.map((crumb, index) => (
-                            <span key={crumb.id}>
+                            <span key={crumb.id} className="flex items-center">
                               <Button variant="link" size="sm" className="p-0 h-auto text-muted-foreground hover:text-primary" onClick={() => handleSelectDocument(crumb.id)}>
                                 {crumb.name}
                               </Button>
-                              {index < breadcrumbs.length - 1 && ' / '}
+                              {index < breadcrumbs.length - 1 && <span className="mx-1">/</span>}
                             </span>
                           ))}
                         </div>
@@ -207,40 +233,51 @@ export default function DocumentPage() {
                           Last updated: {new Date().toLocaleDateString()}
                         </CardDescription>
                       </div>
-                      <div className="flex items-center space-x-2 ml-auto shrink-0">
-                        {isEditing ? (
-                          <>
-                            <Button onClick={handleSaveContent} disabled={!currentDocument || editedContent === currentDocument.content}>
-                              <Save className="mr-2 h-4 w-4" /> Save
+                      {canEdit && (
+                        <div className="flex items-center space-x-2 ml-auto shrink-0 self-start sm:self-center">
+                          {isEditing ? (
+                            <>
+                              <Button onClick={handleSaveContent} disabled={!currentDocument || editedContent === currentDocument.content || isSaving}>
+                                {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                {isSaving ? "Saving..." : "Save"}
+                              </Button>
+                              <Button variant="outline" onClick={handleCancelEdit} disabled={isSaving}>
+                                <XCircle className="mr-2 h-4 w-4" /> Cancel
+                              </Button>
+                            </>
+                          ) : (
+                            <Button onClick={() => {
+                              if (currentDocument) { 
+                                setEditedContent(currentDocument.content || '');
+                                setIsEditing(true);
+                              }
+                            }}>
+                              <Edit className="mr-2 h-4 w-4" /> Edit
                             </Button>
-                            <Button variant="outline" onClick={handleCancelEdit}>
-                              <XCircle className="mr-2 h-4 w-4" /> Cancel
-                            </Button>
-                          </>
-                        ) : (
-                          <Button onClick={() => {
-                            if (currentDocument) { // currentDocument is a page here
-                              setEditedContent(currentDocument.content || '');
-                              setIsEditing(true);
-                            }
-                          }}>
-                            <Edit className="mr-2 h-4 w-4" /> Edit
-                          </Button>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </CardHeader>
                   <CardContent>
-                    {isEditing ? (
+                    {isEditing && canEdit ? (
                       <WysiwygEditor
                         key={currentDocument.id} 
-                        initialContent={editedContent} // Use editedContent for editor
+                        initialContent={editedContent}
                         onContentChange={handleContentChange}
                       />
                     ) : (
                       <article className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl dark:prose-invert max-w-none py-4">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {currentDocument.content || "*No content yet. Click 'Edit' to start writing.*"}
+                          {currentDocument.content || `*No content yet.${canEdit ? " Click 'Edit' to start writing." : "" }*`}
+                        </ReactMarkdown>
+                      </article>
+                    )}
+                    {!canEdit && isEditing && ( // Show read-only view if user loses edit rights while editing
+                       <article className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl dark:prose-invert max-w-none py-4">
+                        <p className="text-destructive">You no longer have permission to edit this document. Displaying read-only content.</p>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {currentDocument.content || "*No content yet.*"}
                         </ReactMarkdown>
                       </article>
                     )}
@@ -277,6 +314,13 @@ export default function DocumentPage() {
                             ))}
                           </ul>
                        </div>
+                    )}
+                     {!currentDocument && (
+                        <div className="mt-6 text-center">
+                            <Loader2 className="mx-auto h-12 w-12 text-primary/50 animate-spin mb-4" />
+                            <p className="text-muted-foreground">Loading document structure...</p>
+                            <p className="text-sm text-muted-foreground">If this persists, try refreshing or selecting a document from the sidebar.</p>
+                        </div>
                     )}
                   </CardContent>
                  </Card>
