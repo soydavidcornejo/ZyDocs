@@ -17,11 +17,11 @@ export default function HomePage() {
   useEffect(() => {
     if (!loading && currentUser) {
       const memberships = currentUser.organizationMemberships || [];
-      if (memberships.length === 0) { // Corresponds to requiresOrganizationCreation
+      if (requiresOrganizationCreation) { // True if no *active* memberships
         router.push('/create-organization');
       } else if (memberships.length > 0 && !currentUser.currentOrganizationId) {
         // Has orgs, but no active one selected
-        router.push('/select-organization');
+        router.push('/organizations');
       } else if (currentUser.currentOrganizationId) {
         router.push('/docs');
       }
@@ -40,7 +40,7 @@ export default function HomePage() {
   
   // If user is logged in and redirection is in progress via useEffect
   if (currentUser && 
-      ( (currentUser.organizationMemberships || []).length === 0 || // requiresOrganizationCreation
+      ( requiresOrganizationCreation || 
         ((currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId) ||
         currentUser.currentOrganizationId 
       )
@@ -68,8 +68,8 @@ export default function HomePage() {
           <Button asChild size="lg" className="shadow-lg hover:shadow-primary/50 transition-shadow">
             {/* Link destination dynamically determined by auth state */}
             <Link href={currentUser ? 
-                          ( (currentUser.organizationMemberships || []).length === 0 ? "/create-organization" : 
-                            ((currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId ? "/select-organization" : "/docs") 
+                          ( requiresOrganizationCreation ? "/create-organization" : 
+                            (((currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId) ? "/organizations" : "/docs") 
                           ) 
                           : "/login"}>
               Get Started <ArrowRight className="ml-2 h-5 w-5" />

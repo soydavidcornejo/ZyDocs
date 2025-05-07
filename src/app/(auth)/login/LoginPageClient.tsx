@@ -18,17 +18,21 @@ export function LoginPageClient() {
   useEffect(() => {
     if (!loading && currentUser) {
       const memberships = currentUser.organizationMemberships || [];
-      if (memberships.length === 0) { 
+      if (redirectPath && redirectPath !== '/create-organization' && redirectPath !== '/organizations' && redirectPath !== '/docs') {
+        router.push(redirectPath);
+      } else if (requiresOrganizationCreation) { 
+        // This implies memberships.length === 0 for active ones
         router.push('/create-organization');
       } else if (memberships.length > 0 && !currentUser.currentOrganizationId) {
-        router.push('/select-organization');
-      } else if (redirectPath && redirectPath !== '/create-organization' && redirectPath !== '/select-organization') {
-        router.push(redirectPath);
+        // Has organizations, but no active one selected
+        router.push('/organizations');
       } else if (currentUser.currentOrganizationId) {
+        // Has an active organization
          router.push('/docs'); 
       } else {
-        // Fallback if no other condition met but user exists (e.g. has orgs, has active one, no redirect)
-        router.push('/docs'); 
+        // Fallback for any other scenario where user is logged in but no clear next step
+        // e.g. if redirectPath was one of the excluded ones but other conditions didn't match
+        router.push('/organizations'); 
       }
     }
   }, [currentUser, loading, router, redirectPath, requiresOrganizationCreation]);

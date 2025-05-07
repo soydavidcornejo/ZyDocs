@@ -16,11 +16,11 @@ export default function ProfilePage() {
       if (!currentUser) {
         router.push('/login?redirect=/profile');
       } else {
-        const memberships = currentUser.organizationMemberships || [];
-        if (memberships.length === 0) { // requiresOrganizationCreation
+        // const memberships = currentUser.organizationMemberships || []; // Not needed directly, using requiresOrganizationCreation
+        if (requiresOrganizationCreation) { 
           router.push('/create-organization');
-        } else if (memberships.length > 0 && !currentUser.currentOrganizationId) {
-          router.push('/select-organization');
+        } else if ((currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId) {
+          router.push('/organizations');
         }
         // If user has an active org, they can access profile page.
       }
@@ -33,7 +33,7 @@ export default function ProfilePage() {
 
   // Fallback if redirection logic in useEffect hasn't kicked in or user should be elsewhere
   if (!currentUser || 
-      (currentUser && (currentUser.organizationMemberships || []).length === 0) || 
+      (currentUser && requiresOrganizationCreation) || 
       (currentUser && (currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId)
      ) {
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Redirecting...</div>;

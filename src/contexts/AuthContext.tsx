@@ -17,7 +17,7 @@ import type { UserProfile, UserRole, AuthenticatedUser } from '@/types/user';
 import type { OrganizationMember } from '@/types/organization';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2 } from 'lucide-react';
-import { getUserOrganizationMemberships } from '@/lib/firebase/firestore/organizationMembers';
+import { getUserOrganizationMemberships, updateOrganizationMemberStatus } from '@/lib/firebase/firestore/organizationMembers';
 import { updateUserActiveOrganization as updateUserActiveOrgInFirestore } from '@/lib/firebase/firestore/users';
 import { useRouter } from 'next/navigation';
 
@@ -26,13 +26,13 @@ interface AuthContextType {
   currentUser: AuthenticatedUser | null;
   firebaseUser: FirebaseUser | null;
   loading: boolean;
-  requiresOrganizationCreation: boolean; // True if user has NO organizations
-  setRequiresOrganizationCreation: (value: boolean) => void;
+  requiresOrganizationCreation: boolean; // True if user has NO organizations with 'active' status
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   updateUserDisplayNameAndPhoto: (displayName: string, photoURL?: string | null) => Promise<void>;
   refreshUserProfile: () => Promise<void>;
   selectActiveOrganization: (organizationId: string) => Promise<void>;
+  leaveOrganization: (organizationId: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -51,7 +51,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let userRoleFromClaims: UserRole = 'reader';
 
     try {
-      const tokenResult = await fbUser.getIdTokenResult(true);
+      const tokenResult = await fbUser.getIdTokenResult(true); // Force refresh token for latest claims
       userRoleFromClaims = (tokenResult.claims.role as UserRole) || 'reader';
     } catch (error) {
       console.warn("Warning: Error fetching token result for role.", error);
@@ -71,35 +71,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: serverTimestamp() as Timestamp,
       };
       await setDoc(userRef, userProfileData);
+      // Fetch again to get server timestamps resolved
       userDoc = await getDoc(userRef); 
       userProfileData = userDoc.data() as UserProfile;
     } else {
       userProfileData = userDoc.data() as UserProfile;
-      if (userProfileData.role !== userRoleFromClaims) {
+      // Update role from claims if it differs from Firestore, or if Firestore role is missing
+      if (userProfileData.role !== userRoleFromClaims || !userProfileData.role) {
         await updateDoc(userRef, { role: userRoleFromClaims, updatedAt: serverTimestamp() });
         userProfileData.role = userRoleFromClaims;
       }
     }
     
-    const memberships = await getUserOrganizationMemberships(fbUser.uid);
+    const memberships = await getUserOrganizationMemberships(fbUser.uid); // Fetches only 'active' status memberships
     let activeOrgId = userProfileData.activeOrganizationId;
     let currentOrgRole: UserRole | null = null;
 
     if (memberships.length === 0) {
       setRequiresOrganizationCreation(true);
-      activeOrgId = null;
-      if (userProfileData.activeOrganizationId) {
+      activeOrgId = null; // Ensure activeOrgId is null if no active memberships
+      if (userProfileData.activeOrganizationId) { // If there was an active one, clear it
         await updateUserActiveOrgInFirestore(fbUser.uid, null);
         userProfileData.activeOrganizationId = null;
       }
     } else {
       setRequiresOrganizationCreation(false);
-      const activeMembership = memberships.find(m => m.organizationId === activeOrgId && m.status === 'active');
+      const activeMembership = memberships.find(m => m.organizationId === activeOrgId); // Already filtered by 'active' status
       if (activeMembership) {
         currentOrgRole = activeMembership.role;
       } else {
-        // No valid active org, or current activeOrgId is not in memberships (e.g., user removed)
-        // Don't auto-select. Let AppLayout/LoginPage handle redirection to /select-organization
+        // No valid active org selected from the available active memberships.
+        // Don't auto-select. Let UI (e.g. /organizations page) handle selection.
         activeOrgId = null; 
         currentOrgRole = null;
         if (userProfileData.activeOrganizationId) { // Clear invalid active org from DB
@@ -119,7 +121,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ...resolvedUserProfile,
       currentOrganizationId: activeOrgId,
       currentOrganizationRole: currentOrgRole,
-      organizationMemberships: memberships,
+      organizationMemberships: memberships, // These are already filtered to 'active'
     };
 
   }, []);
@@ -131,13 +133,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const updatedProfile = await syncUserProfile(auth.currentUser);
         setCurrentUser(updatedProfile);
-        // Logic for requiresOrganizationCreation is handled within syncUserProfile
       } catch (error) {
         console.error("Error refreshing user profile:", error);
         toast({ title: "Error", description: "Could not refresh user profile.", variant: "destructive" });
       } finally {
         setLoading(false);
       }
+    } else {
+      setLoading(false); // Ensure loading is false if no user
     }
   }, [syncUserProfile, toast]);
 
@@ -157,7 +160,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } else {
         setCurrentUser(null);
-        setRequiresOrganizationCreation(false); // Reset this on logout
+        setRequiresOrganizationCreation(false); 
         setLoading(false);
       }
     });
@@ -167,19 +170,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const selectActiveOrganization = useCallback(async (organizationId: string) => {
     if (!currentUser || !firebaseUser) {
         toast({ title: "Error", description: "User not authenticated.", variant: "destructive" });
+        router.push('/login');
         return;
     }
+    // Check if the organizationId is part of the user's current active memberships
+    const isValidSelection = currentUser.organizationMemberships?.some(mem => mem.organizationId === organizationId && mem.status === 'active');
+
+    if (!isValidSelection) {
+        toast({ title: "Selection Error", description: "Cannot select this organization. It may be inactive or you are no longer a member.", variant: "destructive" });
+        await refreshUserProfile(); // Refresh to get latest state
+        router.push('/organizations'); // Redirect to organization selection
+        return;
+    }
+
     setLoading(true);
     try {
         await updateUserActiveOrgInFirestore(firebaseUser.uid, organizationId);
-        await refreshUserProfile(); // This will update currentUser with new active org and role
-        router.push('/docs'); // Navigate to docs after selection
+        await refreshUserProfile(); 
+        router.push('/docs'); 
     } catch (error) {
         console.error("Error selecting active organization:", error);
         toast({ title: "Error", description: "Could not switch organization.", variant: "destructive" });
-        setLoading(false); // Ensure loading is false on error
+        setLoading(false); 
     }
-    // setLoading(false) will be handled by refreshUserProfile's finally block if successful
   }, [currentUser, firebaseUser, refreshUserProfile, router, toast]);
 
 
@@ -188,35 +201,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-      // onAuthStateChanged will handle setting currentUser and subsequent loading state
       toast({ title: 'Login Successful', description: 'Welcome!' });
+      // onAuthStateChanged will handle further actions.
     } catch (error) {
       console.error("Error signing in with Google:", error);
       toast({ title: 'Login Failed', description: 'Could not sign in with Google. Please try again.', variant: 'destructive' });
-      setLoading(false); // Ensure loading is false on sign-in error
+      setLoading(false); 
     }
   }, [toast]);
 
   const logout = useCallback(async () => {
     setLoading(true);
     try {
+      if (currentUser?.uid) { // Clear active org on logout from Firestore
+        await updateUserActiveOrgInFirestore(currentUser.uid, null);
+      }
       await signOut(auth);
-      // onAuthStateChanged will set currentUser to null and loading to false
       toast({ title: 'Logged Out', description: 'You have been successfully logged out.' });
       router.push('/login');
     } catch (error) {
       console.error("Error signing out:", error);
       toast({ title: 'Logout Failed', description: 'Could not sign out. Please try again.', variant: 'destructive' });
-      setLoading(false); // Ensure loading is false on logout error
+    } finally {
+        setCurrentUser(null); // Ensure client state is cleared immediately
+        setFirebaseUser(null);
+        setRequiresOrganizationCreation(false);
+        setLoading(false);
     }
-  }, [toast, router]);
+  }, [toast, router, currentUser?.uid]);
 
   const updateUserDisplayNameAndPhoto = useCallback(async (displayName: string, photoURL?: string | null) => {
     if (!auth.currentUser) {
       toast({ title: 'Error', description: 'No user logged in.', variant: 'destructive' });
       throw new Error('No user logged in');
     }
-    // setLoading(true); // refreshUserProfile will handle loading state
     try {
       const updatePayload: { displayName?: string; photoURL?: string | null } = { displayName };
       if (photoURL !== undefined) {
@@ -239,28 +257,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       console.error("Error updating profile:", error);
       toast({ title: 'Update Failed', description: 'Could not update profile.', variant: 'destructive' });
-      // setLoading(false); // Ensure loading is false on error if refreshUserProfile doesn't run
       throw error;
     }
-    // setLoading(false) // Handled by refreshUserProfile
   }, [toast, refreshUserProfile]);
+
+  const leaveOrganization = useCallback(async (organizationId: string) => {
+    if (!currentUser || !firebaseUser) {
+      toast({ title: "Error", description: "User not authenticated.", variant: "destructive" });
+      throw new Error("User not authenticated.");
+    }
+    
+    const membership = currentUser.organizationMemberships?.find(mem => mem.organizationId === organizationId && mem.status === 'active');
+    if (!membership || !membership.id) {
+      toast({ title: "Error", description: "Membership not found or already inactive.", variant: "destructive" });
+      throw new Error("Membership not found or already inactive.");
+    }
+
+    // Add check: User cannot leave if they are the owner AND the only admin.
+    // This requires fetching organization details to check ownerUid and fetching all admin members for that org.
+    // For simplicity now, this check is partially done on the UI. A robust check should be here or backend.
+
+    setLoading(true);
+    try {
+      await updateOrganizationMemberStatus(membership.id, 'inactive'); // Or 'left'
+      
+      // If the left organization was the active one, clear it
+      if (currentUser.currentOrganizationId === organizationId) {
+        await updateUserActiveOrgInFirestore(firebaseUser.uid, null);
+      }
+      await refreshUserProfile(); // This will update currentUser and requiresOrganizationCreation
+      // No explicit redirect here, AppLayout or page will handle it based on new currentUser state
+    } catch (error) {
+      setLoading(false);
+      console.error("Error leaving organization:", error);
+      toast({ title: "Error", description: "Could not leave organization.", variant: "destructive" });
+      throw error;
+    }
+  }, [currentUser, firebaseUser, refreshUserProfile, toast]);
   
   const contextValue = {
     currentUser,
     firebaseUser,
     loading,
     requiresOrganizationCreation,
-    setRequiresOrganizationCreation,
     signInWithGoogle,
     logout,
     updateUserDisplayNameAndPhoto,
     refreshUserProfile,
     selectActiveOrganization,
+    leaveOrganization,
   };
 
   return (
     <AuthContext.Provider value={contextValue}>
-      {loading && !currentUser && typeof window !== 'undefined' && window.location.pathname !== '/login' ? ( // Added path check to avoid flicker on login page
+      {loading && typeof window !== 'undefined' && window.location.pathname !== '/login' && window.location.pathname !== '/' ? ( 
          <div className="flex h-screen items-center justify-center bg-background">
            <Loader2 className="h-8 w-8 animate-spin text-primary" />
            <span className="ml-2 text-lg text-foreground">Initializing ZyDocs...</span>
