@@ -22,6 +22,8 @@ interface CreatePageModalProps {
   initialParentId?: string | null; // Optional: pre-select a parent
 }
 
+const NO_PARENT_VALUE = "__NO_PARENT_SELECTED__"; // Unique value for the "No Parent" option
+
 export const CreatePageModal: React.FC<CreatePageModalProps> = ({
   isOpen,
   onClose,
@@ -56,7 +58,7 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
 
       const newPage = await createDocumentInFirestore(
         pageName.trim(),
-        parentId,
+        parentId, // parentId is already null or a string ID
         organizationId,
         order,
         `# ${pageName.trim()}\n\nStart writing here...`
@@ -106,15 +108,15 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
                 Parent Page
               </Label>
               <Select
-                value={parentId || ''} // Ensure value is string or undefined for Select
-                onValueChange={(value) => setParentId(value || null)} // Convert empty string back to null
+                value={parentId === null ? NO_PARENT_VALUE : parentId}
+                onValueChange={(value) => setParentId(value === NO_PARENT_VALUE ? null : value)}
                 disabled={isSubmitting}
               >
                 <SelectTrigger className="col-span-3">
                   <SelectValue placeholder="Select parent (optional)" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">
+                  <SelectItem value={NO_PARENT_VALUE}>
                     <em>No Parent (Root Level)</em>
                   </SelectItem>
                   {parentPageOptions.map((doc) => (
