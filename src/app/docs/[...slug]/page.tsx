@@ -1,7 +1,7 @@
 // src/app/docs/[...slug]/page.tsx
 "use client";
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, FormEvent } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -13,12 +13,16 @@ import { buildDocumentTree, findDocumentInList } from "@/config/docs";
 import type { DocumentNode } from "@/types/document";
 import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarTrigger, SidebarInset, SidebarRail, SidebarFooter } from "@/components/ui/sidebar";
 import { Button } from '@/components/ui/button';
-import { Save, PlusCircle, Edit, XCircle, Loader2, Building } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Save, PlusCircle, Edit, XCircle, Loader2, Building, FilePlus } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase/config';
-import { collection, getDocs, doc, getDoc, updateDoc, serverTimestamp, query, where, orderBy, type Timestamp } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, type Timestamp } from 'firebase/firestore';
+import { createDocumentInFirestore, getDocumentsForOrganization } from '@/lib/firebase/firestore/documents';
 
 const saveDocumentContentToFirestore = async (documentId: string, content: string): Promise<boolean> => {
   console.log(`Saving content for document ${documentId} to Firestore:`, content);
@@ -51,10 +55,14 @@ export default function DocumentPage() {
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [loadingDocuments, setLoadingDocuments] = useState<boolean>(true);
 
+  const [isCreatePageDialogOpen, setIsCreatePageDialogOpen] = useState(false);
+  const [newPageName, setNewPageName] = useState('');
+  const [isCreatingPage, setIsCreatingPage] = useState(false);
+
+
   const documentIdFromRoute = params.slug ? (Array.isArray(params.slug) ? params.slug[params.slug.length -1] : params.slug) : null;
   const currentPath = `/docs/${documentIdFromRoute || ''}`; 
 
-  // Handle redirection based on auth and organization status
   useEffect(() => {
     if (!authLoading) {
       if (!currentUser) {
@@ -62,56 +70,36 @@ export default function DocumentPage() {
       } else if (requiresOrganizationCreation) {
         router.push('/create-organization');
       } else if (!currentUser.currentOrganizationId) {
-        // This case should ideally be handled by requiresOrganizationCreation,
-        // but as a fallback or if context updates later.
-        toast({ title: "No Organization", description: "Please create or select an organization.", variant: "destructive"});
-        router.push('/create-organization'); // or a page to select an org if multiple exist
+        toast({ title: "No Organization Selected", description: "Please select an organization from the '/organizations' page.", variant: "default"});
+        router.push('/organizations'); 
       }
     }
   }, [currentUser, authLoading, requiresOrganizationCreation, router, currentPath, toast]);
 
-  // Fetch documents for the current organization
   useEffect(() => {
     if (currentUser && currentUser.currentOrganizationId && !requiresOrganizationCreation) {
       const fetchDocs = async () => {
         setLoadingDocuments(true);
         try {
-          const docsCollection = collection(db, 'documents');
-          // Filter documents by the current user's active organization
-          const q = query(
-            docsCollection, 
-            where("organizationId", "==", currentUser.currentOrganizationId), 
-            orderBy("parentId"), 
-            orderBy("order", "asc"), 
-            orderBy("name", "asc")
-          );
-          const snapshot = await getDocs(q);
-          const docsList = snapshot.docs.map(docData => {
-            const data = docData.data() as Omit<DocumentNode, 'id'>;
-            const createdAt = data.createdAt && (data.createdAt as unknown as Timestamp).toDate ? (data.createdAt as unknown as Timestamp).toDate() : undefined;
-            const updatedAt = data.updatedAt && (data.updatedAt as unknown as Timestamp).toDate ? (data.updatedAt as unknown as Timestamp).toDate() : undefined;
-            
-            return { 
-              ...data, 
-              id: docData.id,
-              createdAt,
-              updatedAt,
-            } as DocumentNode;
-          });
+          const docsList = await getDocumentsForOrganization(currentUser.currentOrganizationId!);
           setFlatDocumentsList(docsList);
           const tree = buildDocumentTree(docsList);
           setDocumentTree(tree);
 
-          // If no document ID in route, and tree exists, try to set a default
           if (!documentIdFromRoute && tree.length > 0) {
-            const firstOrgNode = tree.find(n => n.type === 'organization');
-            if (firstOrgNode) {
-               router.push(`/docs/${firstOrgNode.id}`);
-            } else if (tree[0]?.id) { // Fallback to any first node
+            // Default to the organization node or first available page.
+            const orgNode = tree.find(n => n.id === currentUser.currentOrganizationId && n.type === 'organization');
+            if (orgNode) {
+               router.push(`/docs/${orgNode.id}`);
+            } else if (tree[0]?.id) { 
                router.push(`/docs/${tree[0].id}`);
             }
+          } else if (documentIdFromRoute && !docsList.find(d => d.id === documentIdFromRoute)) {
+            // If route ID is invalid for current org, redirect to org root or first doc
+             toast({ title: "Document Not Found", description: "The requested document does not exist in this organization or you don't have access.", variant: "destructive" });
+             const orgNode = tree.find(n => n.id === currentUser.currentOrganizationId && n.type === 'organization');
+             router.push(orgNode ? `/docs/${orgNode.id}` : (tree[0] ? `/docs/${tree[0].id}` : '/organizations'));
           }
-
 
         } catch (error) {
           console.error("Error fetching documents:", error);
@@ -122,7 +110,6 @@ export default function DocumentPage() {
       };
       fetchDocs();
     } else if (currentUser && !currentUser.currentOrganizationId && !requiresOrganizationCreation) {
-        // User logged in, but no active org, and not in creation flow (edge case, should be redirected)
         setLoadingDocuments(false);
         setFlatDocumentsList([]);
         setDocumentTree([]);
@@ -131,20 +118,34 @@ export default function DocumentPage() {
 
 
   useEffect(() => {
-    // This effect handles setting the current document based on ID from route
-    // and user's permissions for editing.
     if (currentUser && currentUser.currentOrganizationId && flatDocumentsList.length > 0) { 
       if (documentIdFromRoute) {
         const doc = findDocumentInList(flatDocumentsList, documentIdFromRoute);
-        setCurrentDocument(doc);
-        if (doc) {
-          setEditedContent(doc.content || '');
+        // Ensure the found doc actually belongs to the current organization
+        if (doc && doc.organizationId === currentUser.currentOrganizationId) {
+            setCurrentDocument(doc);
+            setEditedContent(doc.content || '');
+            const userCanEdit = currentUser.currentOrganizationRole === 'admin' || currentUser.currentOrganizationRole === 'editor';
+            setIsEditing(searchParams.get('edit') === 'true' && userCanEdit);
+        } else if (doc && doc.organizationId !== currentUser.currentOrganizationId) {
+            // Doc exists but not for this org. Clear currentDocument, show error/redirect.
+            setCurrentDocument(null);
+            toast({ title: "Access Denied", description: "This document does not belong to your active organization.", variant: "destructive"});
+            router.push(`/docs/${currentUser.currentOrganizationId}`); // Go to org root
+        } else {
+             // Document not found in list, could be loading or invalid ID for this org
+            setCurrentDocument(null);
+             // Potentially show a "not found" message if loading is complete
+            if (!loadingDocuments) {
+                // toast({ title: "Document not found", description: `Document with ID ${documentIdFromRoute} not found.`, variant: "destructive" });
+            }
         }
-        const userCanEdit = currentUser.currentOrganizationRole === 'admin' || currentUser.currentOrganizationRole === 'editor';
-        setIsEditing(searchParams.get('edit') === 'true' && userCanEdit);
+      } else {
+        // No specific document in route, clear current document. A default might be set by other useEffect.
+        setCurrentDocument(null);
       }
     }
-  }, [documentIdFromRoute, flatDocumentsList, currentUser, searchParams]);
+  }, [documentIdFromRoute, flatDocumentsList, currentUser, searchParams, loadingDocuments, router, toast]);
 
   const handleContentChange = useCallback((content: string) => {
     setEditedContent(content);
@@ -160,7 +161,8 @@ export default function DocumentPage() {
           doc.id === currentDocument.id ? { ...doc, content: editedContent, updatedAt: new Date() } : doc
         );
         setFlatDocumentsList(updatedFlatList);
-        setDocumentTree(buildDocumentTree(updatedFlatList));
+        // No need to rebuild tree if only content changed, but if metadata like name changes, then yes.
+        // For content, just update currentDocument
         setCurrentDocument(prev => prev ? {...prev, content: editedContent, updatedAt: new Date()} : null);
         
         router.push(`/docs/${currentDocument.id}`, { scroll: false });
@@ -182,9 +184,11 @@ export default function DocumentPage() {
   };
   
   const handleEnterEditMode = () => {
-    if (canEdit) {
+    if (canEdit && currentDocument && currentDocument.type === 'page') {
       router.push(`/docs/${documentIdFromRoute}?edit=true`, { scroll: false });
-      setIsEditing(true);
+      // setIsEditing(true); // This will be set by useEffect watching searchParams
+    } else if (currentDocument && currentDocument.type !== 'page') {
+        toast({ title: "Cannot Edit", description: "Only pages can be edited directly. Select a page.", variant: "default" });
     }
   };
 
@@ -193,7 +197,7 @@ export default function DocumentPage() {
       setEditedContent(currentDocument.content || ''); 
     }
     router.push(`/docs/${documentIdFromRoute}`, { scroll: false }); 
-    setIsEditing(false);
+    // setIsEditing(false); // This will be set by useEffect watching searchParams
     toast({
       title: "Editing Cancelled",
       description: "Your changes have been discarded.",
@@ -203,35 +207,78 @@ export default function DocumentPage() {
 
   const handleSelectDocument = (id: string) => {
      if (isEditing && currentDocument && editedContent !== currentDocument.content) {
-      if(confirm("You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.")) {
-        router.push(`/docs/${id}`); 
-        setIsEditing(false); 
-      }
-    } else {
-      router.push(`/docs/${id}`);
-      setIsEditing(false); 
-    }
+        // Using AlertDialog for unsaved changes confirmation
+        // This needs to be wired up if AlertDialog is preferred over simple confirm()
+        if(confirm("You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.")) {
+            router.push(`/docs/${id}`); 
+            // setIsEditing(false); // Let useEffect handle based on new route
+        }
+     } else {
+        router.push(`/docs/${id}`);
+        // setIsEditing(false); // Let useEffect handle
+     }
   };
   
   const getBreadcrumbs = (docId: string | null, docs: DocumentNode[]): DocumentNode[] => {
     if (!docId) return [];
     const path: DocumentNode[] = [];
-    let currentDoc = findDocumentInList(docs, docId);
-    while(currentDoc) {
-      path.unshift(currentDoc);
-      currentDoc = currentDoc.parentId ? findDocumentInList(docs, currentDoc.parentId) : null;
+    let currentCRDoc = findDocumentInList(docs, docId);
+    while(currentCRDoc) {
+      path.unshift(currentCRDoc);
+      currentCRDoc = currentCRDoc.parentId ? findDocumentInList(docs, currentCRDoc.parentId) : null;
     }
     return path;
   };
 
   const breadcrumbs = getBreadcrumbs(currentDocument?.id || null, flatDocumentsList);
 
-  if (authLoading || loadingDocuments) {
+  const handleCreatePageSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !currentUser.currentOrganizationId || !newPageName.trim()) {
+      toast({ title: "Error", description: "Page name cannot be empty.", variant: "destructive" });
+      return;
+    }
+    setIsCreatingPage(true);
+    try {
+      const effectiveParentId = currentDocument ? (currentDocument.type === 'page' ? currentDocument.parentId : currentDocument.id) : currentUser.currentOrganizationId;
+      const orgId = currentUser.currentOrganizationId!;
+      
+      const siblings = flatDocumentsList.filter(doc => doc.parentId === effectiveParentId);
+      const order = siblings.length > 0 ? Math.max(...siblings.map(s => s.order || 0)) + 1 : 0;
+
+      const newDoc = await createDocumentInFirestore(
+        newPageName.trim(),
+        effectiveParentId,
+        orgId,
+        'page',
+        order,
+        `# ${newPageName.trim()}\n\nStart writing your content here...`
+      );
+
+      setFlatDocumentsList(prev => [...prev, newDoc].sort((a,b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name)));
+      // setDocumentTree will be re-calculated in useEffect based on flatDocumentsList change, but we can trigger it manually
+      setDocumentTree(buildDocumentTree([...flatDocumentsList, newDoc]));
+
+
+      toast({ title: "Page Created", description: `Page "${newDoc.name}" created successfully.` });
+      setIsCreatePageDialogOpen(false);
+      setNewPageName('');
+      router.push(`/docs/${newDoc.id}?edit=true`);
+
+    } catch (error) {
+      console.error("Error creating page:", error);
+      toast({ title: "Creation Failed", description: (error as Error).message || "Could not create page.", variant: "destructive" });
+    } finally {
+      setIsCreatingPage(false);
+    }
+  };
+
+
+  if (authLoading || (loadingDocuments && currentUser && currentUser.currentOrganizationId)) {
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /> <span className="ml-2">Loading documents...</span></div>;
   }
 
   if (!currentUser || !currentUser.currentOrganizationId || requiresOrganizationCreation) {
-    // Should be redirected by initial useEffects, this is a fallback.
     return (
         <div className="flex h-[calc(100vh-4rem)] items-center justify-center flex-col">
             <Building className="h-12 w-12 text-primary/50 mb-4" />
@@ -247,6 +294,11 @@ export default function DocumentPage() {
                     Login
                 </Button>
             )}
+             {!authLoading && currentUser && !currentUser.currentOrganizationId && !requiresOrganizationCreation && (
+                 <Button onClick={() => router.push('/organizations')} className="mt-4">
+                    Select Organization
+                </Button>
+            )}
         </div>
     );
   }
@@ -257,8 +309,8 @@ export default function DocumentPage() {
 
   return (
     <SidebarProvider defaultOpen>
-      <div className="flex h-[calc(100vh-4rem)]">
-        <Sidebar collapsible="icon" className="border-r fixed h-full z-20 pt-16">
+      <div className="flex h-[calc(100vh-4rem)]"> {/* Adjusted for header height */}
+        <Sidebar collapsible="icon" className="border-r fixed h-full z-20 pt-0"> {/* pt-16 removed */}
           <SidebarHeader>
             <div className="flex items-center justify-between w-full">
                <h2 className="text-lg font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
@@ -276,14 +328,14 @@ export default function DocumentPage() {
                   onSelectDocument={handleSelectDocument}
                 />
               ) : (
-                <p className="p-4 text-sm text-muted-foreground">No documents in this organization yet.</p>
+                <p className="p-4 text-sm text-muted-foreground group-data-[collapsible=icon]:hidden">No documents yet.</p>
               )}
             </ScrollArea>
           </SidebarContent>
           {canEdit && ( 
             <SidebarFooter className="group-data-[collapsible=icon]:hidden">
-              <Button variant="outline" size="sm" className="w-full">
-                <PlusCircle className="mr-2 h-4 w-4" /> New Page
+              <Button variant="outline" size="sm" className="w-full" onClick={() => setIsCreatePageDialogOpen(true)}>
+                <FilePlus className="mr-2 h-4 w-4" /> New Page
               </Button>
             </SidebarFooter>
           )}
@@ -298,6 +350,7 @@ export default function DocumentPage() {
                   <CardHeader className="pb-3">
                     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                       <div className="space-y-1 flex-grow">
+                        {breadcrumbs.length > 0 && (
                         <div className="text-sm text-muted-foreground mb-1 flex flex-wrap items-center">
                           {breadcrumbs.map((crumb, index) => (
                             <span key={crumb.id} className="flex items-center">
@@ -308,10 +361,11 @@ export default function DocumentPage() {
                             </span>
                           ))}
                         </div>
+                        )}
                         <CardTitle className="text-3xl font-bold">{currentDocument.name}</CardTitle>
                         {displayDate && (
                             <CardDescription>
-                                Last updated: {new Date(displayDate).toLocaleDateString()}
+                                Last updated: {new Date(displayDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
                             </CardDescription>
                         )}
                       </div>
@@ -366,9 +420,10 @@ export default function DocumentPage() {
                     )}
                   </CardContent>
                 </Card>
-              ) : currentDocument ? ( // For org or space nodes (which are now filtered by organizationId)
+              ) : currentDocument ? ( 
                  <Card className="w-full shadow-md">
                   <CardHeader>
+                     {breadcrumbs.length > 0 && (
                     <div className="text-sm text-muted-foreground mb-1 flex flex-wrap items-center">
                       {breadcrumbs.map((crumb, index) => (
                         <span key={crumb.id} className="flex items-center">
@@ -379,12 +434,13 @@ export default function DocumentPage() {
                         </span>
                       ))}
                     </div>
+                    )}
                     <CardTitle className="text-2xl">{currentDocument.name}</CardTitle>
                     <Badge variant="secondary" className="w-fit">{currentDocument.type.toUpperCase()}</Badge>
                   </CardHeader>
                   <CardContent>
                     <p className="text-muted-foreground">
-                      {`This is ${currentDocument.type === 'organization' ? 'your organization' : 'a space'}. Select an item from the sidebar to view or edit content.`}
+                      {`This is ${currentDocument.type === 'organization' ? currentUser.currentOrganizationId === currentDocument.id ? 'your organization root' : 'an organization' : 'a space'}. Select an item from the sidebar to view or edit content.`}
                     </p>
                     {(flatDocumentsList.filter(d => d.parentId === currentDocument.id).length > 0) ? (
                        <div className="mt-4">
@@ -406,16 +462,27 @@ export default function DocumentPage() {
                     ) : (
                       <p className="mt-4 text-muted-foreground">This {currentDocument.type} is empty.</p>
                     )}
+                    {canEdit && (currentDocument.type === 'organization' || currentDocument.type === 'space') && (
+                        <Button variant="outline" size="sm" className="mt-4" onClick={() => setIsCreatePageDialogOpen(true)}>
+                            <FilePlus className="mr-2 h-4 w-4" /> New Page in {currentDocument.name}
+                        </Button>
+                    )}
                   </CardContent>
                  </Card>
-              ) : ( // No document selected or found, or still loading initial tree
+              ) : ( 
                 <Card className="w-full shadow-md">
-                  <CardHeader><CardTitle>No Document Selected</CardTitle></CardHeader>
+                  <CardHeader><CardTitle>Welcome to Your ZyDocs Workspace!</CardTitle></CardHeader>
                   <CardContent>
                   <div className="mt-6 text-center">
-                      <Loader2 className="mx-auto h-12 w-12 text-primary/50 animate-spin mb-4" />
-                      <p className="text-muted-foreground">Please select a document from the sidebar.</p>
-                      <p className="text-sm text-muted-foreground">If the sidebar is empty, your organization may not have any documents yet.</p>
+                      {loadingDocuments ? <Loader2 className="mx-auto h-12 w-12 text-primary/50 animate-spin mb-4" /> : <Building className="mx-auto h-12 w-12 text-primary/50 mb-4" />}
+                      <p className="text-muted-foreground">
+                        {loadingDocuments ? "Loading content..." : "Please select a document from the sidebar or create a new one."}
+                      </p>
+                      {!loadingDocuments && documentTree.length === 0 && canEdit && (
+                         <Button variant="outline" size="lg" className="mt-6" onClick={() => setIsCreatePageDialogOpen(true)}>
+                            <FilePlus className="mr-2 h-5 w-5" /> Create Your First Page
+                        </Button>
+                      )}
                   </div>
                   </CardContent>
                 </Card>
@@ -424,6 +491,38 @@ export default function DocumentPage() {
           </ScrollArea>
         </SidebarInset>
       </div>
+
+      <AlertDialog open={isCreatePageDialogOpen} onOpenChange={setIsCreatePageDialogOpen}>
+        <AlertDialogContent>
+          <form onSubmit={handleCreatePageSubmit}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Create New Page</AlertDialogTitle>
+              <AlertDialogDescription>
+                Enter a name for your new page. It will be created under {currentDocument ? `"${currentDocument.name}"` : "the organization root"}.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="py-4">
+              <Label htmlFor="newPageName" className="sr-only">Page Name</Label>
+              <Input
+                id="newPageName"
+                value={newPageName}
+                onChange={(e) => setNewPageName(e.target.value)}
+                placeholder="e.g., Project Plan, Meeting Notes"
+                disabled={isCreatingPage}
+                required
+                autoFocus
+              />
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isCreatingPage} onClick={() => setNewPageName('')}>Cancel</AlertDialogCancel>
+              <AlertDialogAction type="submit" disabled={isCreatingPage || !newPageName.trim()}>
+                {isCreatingPage ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlusCircle className="mr-2 h-4 w-4" />}
+                {isCreatingPage ? 'Creating...' : 'Create Page'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </form>
+        </AlertDialogContent>
+      </AlertDialog>
     </SidebarProvider>
   );
 }

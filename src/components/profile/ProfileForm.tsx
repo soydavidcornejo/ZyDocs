@@ -9,12 +9,12 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Loader2, Edit2 } from 'lucide-react'; // Added Edit2 for photo editing (placeholder)
+import { Loader2, Edit2 } from 'lucide-react';
 
 export function ProfileForm() {
   const { currentUser, updateUserDisplayNameAndPhoto, loading: authLoading } = useAuth();
   const [displayName, setDisplayName] = useState('');
-  const [photoURL, setPhotoURL] = useState<string | null | undefined>(undefined); // To manage photo URL edits
+  const [photoURL, setPhotoURL] = useState<string | null | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
 
@@ -31,7 +31,11 @@ export function ProfileForm() {
       toast({ title: 'Validation Error', description: 'Display name cannot be empty.', variant: 'destructive' });
       return;
     }
-    if (displayName === currentUser.displayName && photoURL === currentUser.photoURL) {
+    // Check if only display name or photoURL changed
+    const nameChanged = displayName.trim() !== (currentUser.displayName || '');
+    const photoChanged = photoURL !== currentUser.photoURL;
+
+    if (!nameChanged && !photoChanged) {
       toast({ title: 'No Changes', description: 'Profile information is the same.', variant: 'default' });
       return;
     }
@@ -59,16 +63,15 @@ export function ProfileForm() {
     return 'U';
   };
 
-  // Basic photo URL update simulation - in a real app, this would involve file upload
   const handlePhotoChange = () => {
-    const newPhotoURL = prompt("Enter new photo URL:", photoURL || "");
+    const newPhotoURL = prompt("Enter new photo URL (or leave blank to remove):", photoURL || "");
     if (newPhotoURL !== null) { // prompt returns null if cancelled
-      setPhotoURL(newPhotoURL);
+      setPhotoURL(newPhotoURL.trim() === '' ? null : newPhotoURL.trim());
     }
   };
 
 
-  if (authLoading && !currentUser) { // Show loader if auth is loading AND currentUser is not yet available
+  if (authLoading && !currentUser) {
     return (
       <Card className="w-full max-w-2xl shadow-lg">
         <CardContent className="flex items-center justify-center p-10">
@@ -89,6 +92,10 @@ export function ProfileForm() {
     );
   }
 
+  const currentOrgRoleDisplay = currentUser.currentOrganizationId && currentUser.currentOrganizationRole
+    ? currentUser.currentOrganizationRole.charAt(0).toUpperCase() + currentUser.currentOrganizationRole.slice(1)
+    : 'N/A';
+
   return (
     <Card className="w-full max-w-2xl shadow-lg">
       <CardHeader>
@@ -98,7 +105,6 @@ export function ProfileForm() {
               <AvatarImage src={photoURL || undefined} alt={currentUser.displayName || 'User'} data-ai-hint="profile avatar" />
               <AvatarFallback className="text-3xl sm:text-2xl">{getInitials(displayName || currentUser.displayName)}</AvatarFallback>
             </Avatar>
-             {/* Basic photo change - for real app, use file input & upload service */}
             <Button 
               variant="outline" 
               size="icon" 
@@ -133,25 +139,19 @@ export function ProfileForm() {
               disabled={isSubmitting}
             />
           </div>
-           {/* Optional: Photo URL input for manual editing if desired, otherwise rely on button */}
-           {/* <div className="space-y-2">
-            <Label htmlFor="photoURL">Photo URL (Optional)</Label>
-            <Input
-              id="photoURL"
-              value={photoURL || ''}
-              onChange={(e) => setPhotoURL(e.target.value)}
-              placeholder="https://example.com/avatar.png"
-              disabled={isSubmitting}
-            />
-          </div> */}
           <div className="space-y-2">
-            <Label htmlFor="role">Role</Label>
-            <Input id="role" value={currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1)} disabled />
-             <p className="text-xs text-muted-foreground">Your role is managed by an administrator.</p>
+            <Label htmlFor="currentOrganizationRole">Role in Active Organization</Label>
+            <Input id="currentOrganizationRole" value={currentOrgRoleDisplay} disabled />
+            <p className="text-xs text-muted-foreground">
+              {currentUser.currentOrganizationId 
+                ? "Your role within the active organization. Managed by organization administrators."
+                : "No organization is currently active."
+              }
+            </p>
           </div>
         </CardContent>
         <CardFooter>
-          <Button type="submit" disabled={isSubmitting || (displayName === currentUser.displayName && photoURL === currentUser.photoURL)}>
+          <Button type="submit" disabled={isSubmitting || (displayName === (currentUser.displayName || '') && photoURL === currentUser.photoURL)}>
             {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {isSubmitting ? 'Saving...' : 'Save Changes'}
           </Button>

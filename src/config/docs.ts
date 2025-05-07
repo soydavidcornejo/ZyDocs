@@ -1,66 +1,13 @@
 import type { DocumentNode } from '@/types/document';
 
 // IMPORTANT: Document data is now managed in Firestore.
-// The data structure below (initialDocumentsData) should be seeded into your
-// Firestore `/documents` collection. Each object should become a document,
+// Firestore `/documents` collection is the source of truth.
+// Each object should become a document,
 // using its `id` field as the Firestore document ID.
 // Add `createdAt` and `updatedAt` fields (e.g., using serverTimestamp()).
-// You might also want an `order` field for sorting children.
+// Add an `order` field for sorting children.
+// Add `organizationId` to associate document with an organization.
 
-/*
-export const initialDocumentsData: DocumentNode[] = [
-  {
-    id: 'org1',
-    name: 'Zypher Corp',
-    type: 'organization',
-    parentId: null,
-    // children: [ ... ], // Children are now derived client-side from parentId relations
-    // createdAt: serverTimestamp(),
-    // updatedAt: serverTimestamp(),
-    order: 0,
-  },
-  // ... other organizations, spaces, and pages following the DocumentNode structure
-  // For example:
-  // {
-  //   id: 'space1-org1',
-  //   name: 'Product Development',
-  //   type: 'space',
-  //   parentId: 'org1',
-  //   order: 0,
-  //   // ...timestamps
-  // },
-  // {
-  //   id: 'page1-space1',
-  //   name: 'Q4 Roadmap',
-  //   type: 'page',
-  //   parentId: 'space1-org1',
-  //   content: '# Q4 Product Roadmap\n\n...',
-  //   order: 0,
-  //   // ...timestamps
-  // }
-];
-*/
-
-
-// This function will need to be adapted or replaced if complex client-side filtering/searching is still needed
-// on the raw flat list fetched from Firestore before building the tree.
-// For now, it's commented out as tree building will happen after fetching.
-/*
-export const findDocument = (nodes: DocumentNode[], id: string): DocumentNode | null => {
-  for (const node of nodes) {
-    if (node.id === id) {
-      return node;
-    }
-    if (node.children) {
-      const foundInChildren = findDocument(node.children, id);
-      if (foundInChildren) {
-        return foundInChildren;
-      }
-    }
-  }
-  return null;
-};
-*/
 
 /**
  * Helper to build a tree structure from a flat list of documents.
@@ -76,7 +23,14 @@ export const buildDocumentTree = (documents: DocumentNode[]): DocumentNode[] => 
 
   documents.forEach(doc => {
     if (doc.parentId && map[doc.parentId]) {
-      map[doc.parentId].childrenFromMap?.push(map[doc.id]);
+      // Ensure parent exists before pushing
+      if(map[doc.parentId].childrenFromMap) {
+        map[doc.parentId].childrenFromMap?.push(map[doc.id]);
+      } else {
+        // This case should ideally not happen if data is consistent, but as a fallback:
+        console.warn(`Parent ${doc.parentId} for doc ${doc.id} not found in map's childrenFromMap. Adding as root.`);
+        roots.push(map[doc.id]);
+      }
     } else {
       roots.push(map[doc.id]);
     }
@@ -85,25 +39,28 @@ export const buildDocumentTree = (documents: DocumentNode[]): DocumentNode[] => 
   // Sort children by 'order' field if present, then by name
   const sortChildrenRecursive = (nodes: DocumentNode[]) => {
     nodes.forEach(node => {
-      if (node.childrenFromMap) {
+      if (node.childrenFromMap && node.childrenFromMap.length > 0) {
         node.childrenFromMap.sort((a, b) => {
           if (a.order !== undefined && b.order !== undefined) {
-            return a.order - b.order;
+            const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+            if (orderDiff !== 0) return orderDiff;
           }
           return a.name.localeCompare(b.name);
         });
-        // Rename childrenFromMap to children for final structure
-        node.children = node.childrenFromMap;
-        delete (node as any).childrenFromMap;
+        node.children = node.childrenFromMap; // Assign to 'children'
         sortChildrenRecursive(node.children);
+      } else {
+        node.children = []; // Ensure children is an empty array if no childrenFromMap
       }
+      delete (node as any).childrenFromMap; // Clean up temporary property
     });
   };
 
   sortChildrenRecursive(roots);
   roots.sort((a, b) => { // Sort root nodes as well
       if (a.order !== undefined && b.order !== undefined) {
-        return a.order - b.order;
+        const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+        if (orderDiff !== 0) return orderDiff;
       }
       return a.name.localeCompare(b.name);
     });
