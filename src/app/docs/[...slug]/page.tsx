@@ -13,7 +13,7 @@ import { initialDocumentsData, findDocument } from "@/config/docs";
 import type { DocumentNode } from "@/types/document";
 import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarTrigger, SidebarInset, SidebarRail, SidebarFooter } from "@/components/ui/sidebar";
 import { Button } from '@/components/ui/button';
-import { Save, PlusCircle, Edit } from 'lucide-react';
+import { Save, PlusCircle, Edit, XCircle } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from '@/components/ui/badge';
 
@@ -57,7 +57,9 @@ export default function DocumentPage() {
     if (documentId) {
       const doc = findDocument(allDocuments, documentId);
       setCurrentDocument(doc);
-      setEditedContent(doc?.content || '');
+      if (doc) {
+        setEditedContent(doc.content || '');
+      }
       setIsEditing(false); // Reset to view mode when document changes
     } else if (allDocuments.length > 0 && allDocuments[0].children && allDocuments[0].children[0].children && allDocuments[0].children[0].children[0]) {
       const firstPageId = allDocuments[0].children[0].children[0].id;
@@ -100,10 +102,24 @@ export default function DocumentPage() {
       }
     }
   };
+  
+  const handleCancelEdit = () => {
+    if (currentDocument) {
+      setEditedContent(currentDocument.content || ''); // Reset to original content
+    }
+    setIsEditing(false);
+    toast({
+      title: "Editing Cancelled",
+      description: "Your changes have been discarded.",
+      variant: "default",
+    });
+  };
 
   const handleSelectDocument = (id: string) => {
      if (isEditing && currentDocument && editedContent !== currentDocument.content) {
       if(confirm("You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.")) {
+        setIsEditing(false); // Reset editing state before navigating
+        setEditedContent(currentDocument.content || ''); // Revert changes
         router.push(`/docs/${id}`);
       }
     } else {
@@ -140,7 +156,7 @@ export default function DocumentPage() {
   return (
     <SidebarProvider defaultOpen>
       <div className="flex h-[calc(100vh-4rem)]"> {/* Ensure full height below header */}
-        <Sidebar collapsible="icon" className="border-r top-0"> {/* Ensure sidebar starts from top */}
+        <Sidebar collapsible="icon" className="border-r"> {/* Sidebar will be positioned by its own fixed logic */}
           <SidebarHeader>
             <div className="flex items-center justify-between w-full">
                <h2 className="text-lg font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
@@ -158,7 +174,7 @@ export default function DocumentPage() {
               />
             </ScrollArea>
           </SidebarContent>
-          {SidebarFooter && ( // Conditional rendering for SidebarFooter if it might not always exist
+          {SidebarFooter && ( 
             <SidebarFooter className="group-data-[collapsible=icon]:hidden">
               <Button variant="outline" size="sm" className="w-full">
                 <PlusCircle className="mr-2 h-4 w-4" /> New Page
@@ -191,22 +207,34 @@ export default function DocumentPage() {
                           Last updated: {new Date().toLocaleDateString()}
                         </CardDescription>
                       </div>
-                      {isEditing ? (
-                        <Button onClick={handleSaveContent} disabled={editedContent === currentDocument.content}>
-                          <Save className="mr-2 h-4 w-4" /> Save Changes
-                        </Button>
-                      ) : (
-                        <Button onClick={() => setIsEditing(true)}>
-                          <Edit className="mr-2 h-4 w-4" /> Edit
-                        </Button>
-                      )}
+                      <div className="flex items-center space-x-2 ml-auto shrink-0">
+                        {isEditing ? (
+                          <>
+                            <Button onClick={handleSaveContent} disabled={!currentDocument || editedContent === currentDocument.content}>
+                              <Save className="mr-2 h-4 w-4" /> Save
+                            </Button>
+                            <Button variant="outline" onClick={handleCancelEdit}>
+                              <XCircle className="mr-2 h-4 w-4" /> Cancel
+                            </Button>
+                          </>
+                        ) : (
+                          <Button onClick={() => {
+                            if (currentDocument) { // currentDocument is a page here
+                              setEditedContent(currentDocument.content || '');
+                              setIsEditing(true);
+                            }
+                          }}>
+                            <Edit className="mr-2 h-4 w-4" /> Edit
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent>
                     {isEditing ? (
                       <WysiwygEditor
                         key={currentDocument.id} 
-                        initialContent={currentDocument.content || ''}
+                        initialContent={editedContent} // Use editedContent for editor
                         onContentChange={handleContentChange}
                       />
                     ) : (
