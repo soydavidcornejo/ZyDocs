@@ -11,13 +11,19 @@ export interface Organization {
 }
 
 export interface OrganizationMember {
-  id?: string; // Firestore document ID (e.g., orgId_userId or auto-generated)
+  id: string; // Firestore document ID of the membership record (typically orgId_userId)
   organizationId: string;
   userId: string;
   role: UserRole;
-  status: 'active' | 'invited' | 'pending_approval'; // Status of the membership
+  status: 'active' | 'invited' | 'pending_approval' | 'inactive'; // Added 'inactive' for leave functionality
   joinedAt: Timestamp | Date;
   updatedAt?: Timestamp | Date;
+}
+
+export interface OrganizationMemberWithDetails extends OrganizationMember {
+  displayName: string | null;
+  email: string | null;
+  photoURL: string | null;
 }
 
 export interface Invitation {
@@ -25,9 +31,10 @@ export interface Invitation {
   organizationId: string;
   organizationName?: string; // For display purposes in notifications
   invitedByUserUid: string;
-  invitedUserEmail: string;
+  invitedByUserEmail?: string; // Email of the user who sent the invite
+  invitedUserEmail: string; // Email of the user being invited
   roleToAssign: UserRole;
-  status: 'pending' | 'accepted' | 'declined' | 'expired';
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled'; // Added 'cancelled'
   createdAt: Timestamp | Date;
   updatedAt?: Timestamp | Date;
   expiresAt?: Timestamp | Date; // Optional: for time-limited invitations

@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Users, Loader2 } from 'lucide-react';
 import { collection, getDocs, query, orderBy, limit, type Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
+import { getInitials } from '@/lib/utils'; // Import the utility
 
 export default function UserDirectoryPage() {
   const { currentUser, loading: authLoading } = useAuth();
@@ -23,16 +24,23 @@ export default function UserDirectoryPage() {
     if (!authLoading && !currentUser) {
       router.push('/login?redirect=/users');
     } else if (currentUser) {
+      // This page currently shows all users in the system.
+      // For organization-specific members, see organization settings page.
+      // if (currentUser.currentOrganizationRole !== 'admin') { // This check is against current active org, not global role
+         // Optionally restrict access to this global directory to admins only
+         // toast({ title: "Access Denied", description: "You do not have permission to view the global user directory.", variant: "destructive"});
+         // router.push('/organizations'); 
+         // return;
+      // }
+
       const fetchUsers = async () => {
         setLoadingData(true);
         try {
           const usersCol = collection(db, 'users');
-          // Example: Order by displayName, limit to 50 for performance. Adjust as needed.
           const usersQuery = query(usersCol, orderBy('displayName', 'asc'), limit(50));
           const userSnapshot = await getDocs(usersQuery);
           const userList = userSnapshot.docs.map(doc => {
-            const data = doc.data() as Omit<UserProfile, 'uid'>; // UID is doc.id
-            // Convert Firestore Timestamps to Date objects for easier handling on client
+            const data = doc.data() as Omit<UserProfile, 'uid'>; 
             const createdAt = data.createdAt && (data.createdAt as unknown as Timestamp).toDate ? (data.createdAt as unknown as Timestamp).toDate() : undefined;
             const updatedAt = data.updatedAt && (data.updatedAt as unknown as Timestamp).toDate ? (data.updatedAt as unknown as Timestamp).toDate() : undefined;
             return { 
@@ -45,7 +53,6 @@ export default function UserDirectoryPage() {
           setUsers(userList);
         } catch (error) {
           console.error("Error fetching users:", error);
-          // Handle error (e.g., show toast)
         } finally {
           setLoadingData(false);
         }
@@ -53,23 +60,12 @@ export default function UserDirectoryPage() {
       fetchUsers();
     }
   }, [currentUser, authLoading, router]);
-
-  const getInitials = (name: string | null | undefined) => {
-    if (!name) return 'U';
-    const names = name.split(' ');
-    if (names.length > 1 && names[0] && names[names.length - 1]) {
-      return `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase();
-    }
-    if (names.length > 0 && names[0]) {
-        return names[0].substring(0, 2).toUpperCase();
-    }
-    return 'U';
-  };
   
   const roleVariant = (role: UserProfile['role']): "default" | "secondary" | "outline" | "destructive" => {
+    // This reflects global role from user's profile document, not org-specific role.
     switch(role) {
-      case 'admin': return 'default';
-      case 'editor': return 'secondary';
+      case 'admin': return 'default'; // e.g., system admin based on Firestore user.role
+      case 'editor': return 'secondary'; 
       case 'reader': return 'outline';
       default: return 'outline';
     }
@@ -81,7 +77,6 @@ export default function UserDirectoryPage() {
   }
 
   if (!currentUser) {
-    // This is mainly a fallback, the useEffect should redirect.
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Redirecting to login...</div>;
   }
 
@@ -92,8 +87,8 @@ export default function UserDirectoryPage() {
           <div className="flex items-center space-x-3">
             <Users className="h-8 w-8 text-primary" />
             <div>
-              <CardTitle className="text-2xl">User Directory</CardTitle>
-              <CardDescription>Browse members of your organization.</CardDescription>
+              <CardTitle className="text-2xl">Global User Directory</CardTitle>
+              <CardDescription>Browse all registered users in the system. Roles shown are global system roles.</CardDescription>
             </div>
           </div>
         </CardHeader>
@@ -106,8 +101,7 @@ export default function UserDirectoryPage() {
                     <TableHead className="w-[60px] sm:w-[80px] pr-2">Avatar</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead className="hidden sm:table-cell">Email</TableHead>
-                    <TableHead>Role</TableHead>
-                    {/* Add actions column if needed, e.g., view profile, manage role (for admins) */}
+                    <TableHead>Global Role</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

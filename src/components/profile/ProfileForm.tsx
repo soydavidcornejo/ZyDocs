@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { useToast } from '@/hooks/use-toast';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Loader2, Edit2 } from 'lucide-react';
+import { getInitials } from '@/lib/utils';
 
 export function ProfileForm() {
   const { currentUser, updateUserDisplayNameAndPhoto, loading: authLoading } = useAuth();
@@ -51,18 +52,6 @@ export function ProfileForm() {
     }
   };
   
-  const getInitials = (name: string | null | undefined) => {
-    if (!name) return 'U';
-    const names = name.split(' ');
-    if (names.length > 1 && names[0] && names[names.length - 1]) {
-      return `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase();
-    }
-    if (names.length > 0 && names[0]) {
-        return names[0].substring(0, 2).toUpperCase();
-    }
-    return 'U';
-  };
-
   const handlePhotoChange = () => {
     const newPhotoURL = prompt("Enter new photo URL (or leave blank to remove):", photoURL || "");
     if (newPhotoURL !== null) { // prompt returns null if cancelled
@@ -144,7 +133,7 @@ export function ProfileForm() {
             <Input id="currentOrganizationRole" value={currentOrgRoleDisplay} disabled />
             <p className="text-xs text-muted-foreground">
               {currentUser.currentOrganizationId 
-                ? "Your role within the active organization. Managed by organization administrators."
+                ? "Your role within the active organization. This is managed by organization administrators."
                 : "No organization is currently active."
               }
             </p>

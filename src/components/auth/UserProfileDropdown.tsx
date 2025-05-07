@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { LogOut, User, Users, UserPlus, Settings, Loader2, LogInIcon, Building, ListChecks } from 'lucide-react'; 
-// Changed ListFilter to ListChecks for semantic relevance to "organizations"
+import { getInitials } from '@/lib/utils';
 
 export function UserProfileDropdown() {
   const { currentUser, logout, loading } = useAuth();
@@ -32,18 +32,6 @@ export function UserProfileDropdown() {
       </Button>
     );
   }
-
-  const getInitials = (name: string | null | undefined) => {
-    if (!name) return 'U';
-    const names = name.split(' ');
-    if (names.length > 1 && names[0] && names[names.length - 1]) {
-      return `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase();
-    }
-    if (names.length > 0 && names[0]) {
-        return names[0].substring(0, 2).toUpperCase();
-    }
-    return 'U';
-  };
   
   const memberships = currentUser.organizationMemberships || [];
 
@@ -109,20 +97,23 @@ export function UserProfileDropdown() {
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-xs text-muted-foreground px-2">Current Organization Actions</DropdownMenuLabel>
-            <DropdownMenuItem asChild>
-              <Link href="/users"> 
+            {/* Link to organization members specific to current org (part of settings) */}
+             <DropdownMenuItem asChild>
+              <Link href={`/organization/${currentUser.currentOrganizationId}/settings`}>
                 <Users className="mr-2 h-4 w-4" />
-                <span>Members</span>
+                <span>Members & Settings</span>
               </Link>
             </DropdownMenuItem>
             {(currentUser.currentOrganizationRole === 'admin' || currentUser.currentOrganizationRole === 'editor') && (
               <DropdownMenuItem asChild>
-                <Link href="/invite"> 
+                {/* Pass current org ID to invite page */}
+                <Link href={`/invite?organizationId=${currentUser.currentOrganizationId}`}> 
                   <UserPlus className="mr-2 h-4 w-4" />
                   <span>Invite Users</span>
                 </Link>
               </DropdownMenuItem>
             )}
+            {/* Settings link might be redundant if members are inside settings page already. Keeping for explicitness.
             {currentUser.currentOrganizationRole === 'admin' && (
               <DropdownMenuItem asChild>
                 <Link href={`/organization/${currentUser.currentOrganizationId}/settings`}>
@@ -131,6 +122,7 @@ export function UserProfileDropdown() {
                 </Link>
               </DropdownMenuItem>
             )}
+            */}
           </>
         )}
        
