@@ -55,8 +55,7 @@ export function ProfileForm() {
         return names[0].substring(0, 2).toUpperCase();
     }
     return 'U';
-  };
-
+  }; // Explicit semicolon added
 
   if (authLoading) {
     return (
@@ -125,5 +124,5 @@ export function ProfileForm() {
         </CardFooter>
       </form>
     </Card>
-  </);
+  );
 }
