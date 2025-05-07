@@ -9,7 +9,7 @@ import { DocumentTree } from "@/components/document/DocumentTree";
 import WysiwygEditor from "@/components/editor/WysiwygEditor";
 import { initialDocumentsData, findDocument } from "@/config/docs";
 import type { DocumentNode } from "@/types/document";
-import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarTrigger, SidebarInset, SidebarRail } from "@/components/ui/sidebar";
+import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarTrigger, SidebarInset, SidebarRail, SidebarFooter } from "@/components/ui/sidebar";
 import { ThemeToggle } from '@/components/ThemeToggle'; // Assuming you might want theme toggle here too
 import { Button } from '@/components/ui/button';
 import { Save, PlusCircle } from 'lucide-react';
