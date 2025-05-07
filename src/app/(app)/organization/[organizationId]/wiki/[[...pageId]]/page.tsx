@@ -14,11 +14,11 @@ import {
   SidebarTrigger,
   SidebarContent,
   SidebarInset,
-  SidebarFooter, // Ensure this is correctly imported if used
+  SidebarFooter, 
   useSidebar,
 } from '@/components/ui/sidebar';
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DocumentTree } from "@/components/document/DocumentTree";
 import WysiwygEditor from "@/components/editor/WysiwygEditor";
 import { createDocumentInFirestore, getDocumentsForOrganization } from '@/lib/firebase/firestore/documents';
@@ -47,18 +47,17 @@ const WikiSidebarContent = ({
 }) => {
   const { open, setOpen } = useSidebar();
   const router = useRouter();
+  const { toast } = useToast(); // Added toast for notifications
 
   const handleCreateNewPage = async () => {
     const pageName = prompt('Enter the name for the new page:');
     if (pageName && pageName.trim() !== '') {
       try {
         await createDocumentInFirestore(pageName.trim(), null, organizationId, 'page', 0, `# ${pageName.trim()}\n\nStart writing here...`);
-        // Ideally, refresh documents list here or trigger a re-fetch in the parent
         toast({ title: 'Page Created', description: `Page "${pageName.trim()}" created successfully.` });
-        // Re-fetch or update documents state in parent, then potentially navigate:
-        // For now, just alert and let user navigate or see it in refreshed tree.
-        // Consider using a state management or callback to refresh parent's documents.
-         router.push(`/organization/${organizationId}/wiki`); // Go to wiki root to refresh tree via useEffect
+        // Navigate to the wiki root, which will trigger a re-fetch of documents
+        // including the new page, in the parent component's useEffect.
+        router.push(`/organization/${organizationId}/wiki`); 
       } catch (error) {
         toast({ title: 'Error', description: 'Failed to create page.', variant: 'destructive' });
         console.error("Error creating page:", error);
@@ -153,10 +152,9 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
         setCurrentDocument(doc);
         setEditedContent(doc?.content || '');
       } else {
+        // If on the root of the wiki (no specific page selected), clear current document.
         setCurrentDocument(null);
         setEditedContent('');
-        // If no pageId and documents exist, maybe redirect to the first one?
-        // For now, shows "Select a page" or "Create a page"
       }
     } catch (error) {
       console.error("Failed to fetch documents:", error);
@@ -169,7 +167,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   useEffect(() => {
     if (!authLoading && currentUser) {
       fetchOrganizationDetails();
-      fetchDocuments();
+      fetchDocuments(); // This will also handle setting currentDocument based on currentPageIdFromSlug
     } else if (!authLoading && !currentUser) {
       router.push(`/login?redirect=/organization/${organizationId}/wiki${currentPageIdFromSlug ? `/${currentPageIdFromSlug}` : ''}`);
     }
@@ -177,6 +175,9 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   
 
   const handleSelectDocument = (id: string) => {
+    // When a document is selected from the tree, navigate to its page.
+    // This will trigger the useEffect above to fetch/set the document.
+    // Also, exit edit mode if active.
     router.push(`/organization/${organizationId}/wiki/${id}`);
   };
 
@@ -194,7 +195,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
       setDocuments(docs => docs.map(d => d.id === updatedDoc.id ? updatedDoc : d));
       
       toast({ title: 'Saved (Conceptual)', description: 'Content changes conceptually saved.' });
-      setIsEditing(false);
+      // setIsEditing(false); // This will be handled by router push and useEffect on editModeQuery
       router.push(`/organization/${organizationId}/wiki/${currentDocument.id}`); // Remove ?edit=true
     } catch (error) {
       toast({ title: 'Error', description: 'Failed to save content.', variant: 'destructive' });
@@ -204,12 +205,21 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   };
   
   const toggleEditMode = () => {
-    if (isEditing) { // Leaving edit mode
-        router.push(`/organization/${organizationId}/wiki/${currentPageIdFromSlug || ''}`);
-    } else { // Entering edit mode
-        router.push(`/organization/${organizationId}/wiki/${currentPageIdFromSlug || ''}?edit=true`);
+    if (!currentDocument && !isEditing) {
+      toast({title: "Cannot Edit", description: "Please select a page to edit.", variant: "default"});
+      return;
     }
-    // setIsEditing(!isEditing); // State will be updated by useEffect watching editModeQuery
+    
+    const targetPath = `/organization/${organizationId}/wiki/${currentDocument?.id || ''}`;
+    if (isEditing) { // Leaving edit mode
+        // Optionally, reset editedContent if changes are not saved, or prompt user.
+        // For now, just navigate away from edit mode.
+        if (currentDocument) setEditedContent(currentDocument.content || ''); // Reset to original
+        router.push(targetPath);
+    } else { // Entering edit mode
+        router.push(`${targetPath}?edit=true`);
+    }
+    // setIsEditing state will be updated by useEffect watching editModeQuery
   };
 
   if (authLoading || (!currentUser && !authLoading) || !organization) {
@@ -234,7 +244,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
         <SidebarInset>
           <ScrollArea className="h-full">
             <div className="container mx-auto p-4 md:p-6 lg:p-8">
-              {isLoadingContent && !currentDocument && <div className="flex items-center justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /> <span className="ml-2">Loading page...</span></div>}
+              {isLoadingContent && (!currentDocument && currentPageIdFromSlug) && <div className="flex items-center justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /> <span className="ml-2">Loading page...</span></div>}
               
               {!currentPageIdFromSlug && !isLoadingContent && (
                 <Card className="mt-4 shadow-lg">
@@ -244,6 +254,11 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
                   </CardHeader>
                   <CardContent>
                     <p>Use the sidebar to navigate through existing pages or click the &quot;New Page&quot; button to start a new document.</p>
+                     {canEdit && !currentDocument && (
+                      <Button onClick={toggleEditMode} variant="outline" size="sm" className="mt-4" disabled={true}>
+                          <Edit3 className="mr-2 h-4 w-4" /> Edit Page (Select a page first)
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               )}
@@ -272,7 +287,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
 
                   {isEditing && canEdit ? (
                     <WysiwygEditor
-                      initialContent={currentDocument.content || ''}
+                      initialContent={editedContent} // Use editedContent which is set from currentDocument.content
                       onContentChange={setEditedContent}
                     />
                   ) : (
