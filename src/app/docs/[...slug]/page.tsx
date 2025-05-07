@@ -6,10 +6,10 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DocumentTree } from "@/components/document/DocumentTree";
 import WysiwygEditor from "@/components/editor/WysiwygEditor";
-import { initialDocumentsData, findDocument } from "@/config/docs";
+import { buildDocumentTree, findDocumentInList } from "@/config/docs"; // Use buildDocumentTree
 import type { DocumentNode } from "@/types/document";
 import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarTrigger, SidebarInset, SidebarRail, SidebarFooter } from "@/components/ui/sidebar";
 import { Button } from '@/components/ui/button';
@@ -17,28 +17,22 @@ import { Save, PlusCircle, Edit, XCircle, Loader2 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/AuthContext';
+import { db } from '@/lib/firebase/config';
+import { collection, getDocs, doc, getDoc, updateDoc, serverTimestamp, query, orderBy, type Timestamp } from 'firebase/firestore';
 
-// Helper to simulate saving content
-const saveDocumentContent = async (documentId: string, content: string): Promise<boolean> => {
-  console.log(`Saving content for document ${documentId}:`, content);
-  // In a real app, this would be an API call.
-  // For now, let's simulate a delay and success.
-  await new Promise(resolve => setTimeout(resolve, 500));
-  
-  const updateNodeContent = (nodes: DocumentNode[], id: string, newContent: string): boolean => {
-    for (const node of nodes) {
-      if (node.id === id) {
-        node.content = newContent;
-        return true;
-      }
-      if (node.children) {
-        if (updateNodeContent(node.children, id, newContent)) return true;
-      }
-    }
+const saveDocumentContentToFirestore = async (documentId: string, content: string): Promise<boolean> => {
+  console.log(`Saving content for document ${documentId} to Firestore:`, content);
+  try {
+    const docRef = doc(db, 'documents', documentId);
+    await updateDoc(docRef, { 
+      content: content,
+      updatedAt: serverTimestamp() 
+    });
+    return true;
+  } catch (error) {
+    console.error("Error saving document content to Firestore:", error);
     return false;
-  };
-  updateNodeContent(initialDocumentsData, documentId, content);
-  return true;
+  }
 };
 
 
@@ -51,12 +45,50 @@ export default function DocumentPage() {
   
   const [currentDocument, setCurrentDocument] = useState<DocumentNode | null>(null);
   const [editedContent, setEditedContent] = useState<string>('');
-  const [allDocuments, setAllDocuments] = useState<DocumentNode[]>(initialDocumentsData);
+  const [flatDocumentsList, setFlatDocumentsList] = useState<DocumentNode[]>([]); // Stores flat list from Firestore
+  const [documentTree, setDocumentTree] = useState<DocumentNode[]>([]); // Stores the built tree
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [loadingDocuments, setLoadingDocuments] = useState<boolean>(true);
 
   const documentId = params.slug ? (Array.isArray(params.slug) ? params.slug[params.slug.length -1] : params.slug) : null;
-  const currentPath = `/docs/${documentId || 'org1'}`;
+  const currentPath = `/docs/${documentId || ''}`; // Default to empty if no docId initially
+
+  // Fetch all documents from Firestore on mount
+  useEffect(() => {
+    if (currentUser) { // Only fetch if user is authenticated
+      const fetchDocs = async () => {
+        setLoadingDocuments(true);
+        try {
+          const docsCollection = collection(db, 'documents');
+          // Optional: order by a specific field like 'order' or 'name'
+          const q = query(docsCollection, orderBy("parentId"), orderBy("order", "asc"), orderBy("name", "asc"));
+          const snapshot = await getDocs(q);
+          const docsList = snapshot.docs.map(docData => {
+            const data = docData.data() as Omit<DocumentNode, 'id'>;
+            const createdAt = data.createdAt && (data.createdAt as unknown as Timestamp).toDate ? (data.createdAt as unknown as Timestamp).toDate() : undefined;
+            const updatedAt = data.updatedAt && (data.updatedAt as unknown as Timestamp).toDate ? (data.updatedAt as unknown as Timestamp).toDate() : undefined;
+            
+            return { 
+              ...data, 
+              id: docData.id,
+              createdAt,
+              updatedAt,
+            } as DocumentNode;
+          });
+          setFlatDocumentsList(docsList);
+          setDocumentTree(buildDocumentTree(docsList));
+        } catch (error) {
+          console.error("Error fetching documents:", error);
+          toast({ title: "Error", description: "Could not load documents.", variant: "destructive" });
+        } finally {
+          setLoadingDocuments(false);
+        }
+      };
+      fetchDocs();
+    }
+  }, [currentUser, toast]);
+
 
   useEffect(() => {
     if (!authLoading && !currentUser) {
@@ -65,22 +97,32 @@ export default function DocumentPage() {
   }, [currentUser, authLoading, router, currentPath]);
 
   useEffect(() => {
-    if (currentUser) { // Only process document logic if user is authenticated
+    if (currentUser && flatDocumentsList.length > 0) { 
       if (documentId) {
-        const doc = findDocument(allDocuments, documentId);
+        const doc = findDocumentInList(flatDocumentsList, documentId);
         setCurrentDocument(doc);
         if (doc) {
           setEditedContent(doc.content || '');
         }
-        // Ensure canEdit check happens after currentUser is confirmed
         const userCanEdit = currentUser.role === 'admin' || currentUser.role === 'editor';
         setIsEditing(searchParams.get('edit') === 'true' && userCanEdit);
-      } else if (allDocuments.length > 0 && allDocuments[0]?.children?.[0]?.children?.[0]) {
-        const firstPageId = allDocuments[0].children[0].children[0].id;
-        router.push(`/docs/${firstPageId}`);
+      } else if (documentTree.length > 0 && documentTree[0]?.children?.[0]?.children?.[0]) {
+        // Default to first actual page if no docId
+        const firstPage = documentTree[0].children[0].children[0];
+        if(firstPage && firstPage.type === 'page') {
+          router.push(`/docs/${firstPage.id}`);
+        } else if (documentTree[0]?.children?.[0]?.id) { // Fallback to first space if no page
+           router.push(`/docs/${documentTree[0].children[0].id}`);
+        } else if (documentTree[0]?.id) { // Fallback to first org
+           router.push(`/docs/${documentTree[0].id}`);
+        }
+      } else if (flatDocumentsList.length > 0 && !documentId) {
+         // If tree is empty but flat list has items, pick the first org/space/page as default
+        const defaultDoc = flatDocumentsList.find(d => d.type === 'organization') || flatDocumentsList[0];
+        if (defaultDoc) router.push(`/docs/${defaultDoc.id}`);
       }
     }
-  }, [documentId, allDocuments, router, currentUser, searchParams]);
+  }, [documentId, flatDocumentsList, documentTree, router, currentUser, searchParams]);
 
   const handleContentChange = useCallback((content: string) => {
     setEditedContent(content);
@@ -89,32 +131,29 @@ export default function DocumentPage() {
   const handleSaveContent = async () => {
     if (currentDocument && canEdit) {
       setIsSaving(true);
-      const success = await saveDocumentContent(currentDocument.id, editedContent);
+      const success = await saveDocumentContentToFirestore(currentDocument.id, editedContent);
       setIsSaving(false);
       if (success) {
-        const updatedDocuments = allDocuments.map(org => ({
-          ...org,
-          children: org.children?.map(space => ({
-            ...space,
-            children: space.children?.map(page => 
-              page.id === currentDocument.id ? { ...page, content: editedContent } : page
-            )
-          }))
-        }));
-        setAllDocuments(updatedDocuments);
-        setCurrentDocument(prev => prev ? {...prev, content: editedContent} : null);
-        router.push(`/docs/${currentDocument.id}`, { scroll: false }); // Remove ?edit=true
+        // Update local state to reflect saved content and timestamp
+        const updatedFlatList = flatDocumentsList.map(doc =>
+          doc.id === currentDocument.id ? { ...doc, content: editedContent, updatedAt: new Date() } : doc
+        );
+        setFlatDocumentsList(updatedFlatList);
+        setDocumentTree(buildDocumentTree(updatedFlatList)); // Rebuild tree if necessary
+        setCurrentDocument(prev => prev ? {...prev, content: editedContent, updatedAt: new Date()} : null);
+        
+        router.push(`/docs/${currentDocument.id}`, { scroll: false });
         setIsEditing(false);
 
         toast({
           title: "Content Saved",
-          description: `Changes to "${currentDocument.name}" have been saved.`,
+          description: `Changes to "${currentDocument.name}" have been saved to Firestore.`,
           variant: "default",
         });
       } else {
         toast({
           title: "Error Saving",
-          description: "Could not save changes. Please try again.",
+          description: "Could not save changes to Firestore. Please try again.",
           variant: "destructive",
         });
       }
@@ -130,9 +169,9 @@ export default function DocumentPage() {
 
   const handleCancelEdit = () => {
     if (currentDocument) {
-      setEditedContent(currentDocument.content || ''); // Reset to original content
+      setEditedContent(currentDocument.content || ''); 
     }
-    router.push(`/docs/${documentId}`, { scroll: false }); // Remove ?edit=true
+    router.push(`/docs/${documentId}`, { scroll: false }); 
     setIsEditing(false);
     toast({
       title: "Editing Cancelled",
@@ -145,55 +184,42 @@ export default function DocumentPage() {
      if (isEditing && currentDocument && editedContent !== currentDocument.content) {
       if(confirm("You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.")) {
         router.push(`/docs/${id}`); 
-        setIsEditing(false); // Explicitly set isEditing to false on navigation
+        setIsEditing(false); 
       }
     } else {
       router.push(`/docs/${id}`);
-      setIsEditing(false); // Also ensure edit mode is off if no unsaved changes
+      setIsEditing(false); 
     }
   };
   
-  const getBreadcrumbs = (docId: string | null): DocumentNode[] => {
+  const getBreadcrumbs = (docId: string | null, docs: DocumentNode[]): DocumentNode[] => {
     if (!docId) return [];
     const path: DocumentNode[] = [];
-    
-    function findPath(nodes: DocumentNode[], targetId: string): boolean {
-      for (const node of nodes) {
-        if (node.id === targetId) {
-          path.unshift(node);
-          return true;
-        }
-        if (node.children) {
-          if (findPath(node.children, targetId)) {
-            path.unshift(node);
-            return true;
-          }
-        }
-      }
-      return false;
+    let currentDoc = findDocumentInList(docs, docId);
+    while(currentDoc) {
+      path.unshift(currentDoc);
+      currentDoc = currentDoc.parentId ? findDocumentInList(docs, currentDoc.parentId) : null;
     }
-
-    findPath(allDocuments, docId);
     return path;
   };
 
-  const breadcrumbs = getBreadcrumbs(currentDocument?.id || null);
+  const breadcrumbs = getBreadcrumbs(currentDocument?.id || null, flatDocumentsList);
 
-  if (authLoading) {
+  if (authLoading || loadingDocuments) {
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /> <span className="ml-2">Loading documents...</span></div>;
   }
 
   if (!currentUser) {
-    // This is mainly a fallback, the useEffect should redirect.
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Redirecting to login...</div>;
   }
 
   const canEdit = currentUser.role === 'admin' || currentUser.role === 'editor';
+  const displayDate = currentDocument?.updatedAt || currentDocument?.createdAt;
 
   return (
     <SidebarProvider defaultOpen>
-      <div className="flex h-[calc(100vh-4rem)]"> {/* Ensure full height below header */}
-        <Sidebar collapsible="icon" className="border-r fixed h-full z-20"> {/* Sidebar will be positioned by its own fixed logic, ensure it's above content */}
+      <div className="flex h-[calc(100vh-4rem)]">
+        <Sidebar collapsible="icon" className="border-r fixed h-full z-20 pt-16">
           <SidebarHeader>
             <div className="flex items-center justify-between w-full">
                <h2 className="text-lg font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
@@ -204,11 +230,15 @@ export default function DocumentPage() {
           </SidebarHeader>
           <SidebarContent>
             <ScrollArea className="h-full px-2">
-              <DocumentTree 
-                nodes={allDocuments} 
-                currentDocumentId={currentDocument?.id}
-                onSelectDocument={handleSelectDocument}
-              />
+              {documentTree.length > 0 ? (
+                <DocumentTree 
+                  nodes={documentTree} 
+                  currentDocumentId={currentDocument?.id}
+                  onSelectDocument={handleSelectDocument}
+                />
+              ) : (
+                <p className="p-4 text-sm text-muted-foreground">No documents found or still loading.</p>
+              )}
             </ScrollArea>
           </SidebarContent>
           {canEdit && ( 
@@ -219,9 +249,9 @@ export default function DocumentPage() {
             </SidebarFooter>
           )}
         </Sidebar>
-        <SidebarRail className="fixed z-20" /> {/* Ensure rail is also above potentially overlapping content */}
+        <SidebarRail className="fixed z-20 top-16" /> 
 
-        <SidebarInset className="ml-[var(--sidebar-width)] group-data-[sidebar-state=collapsed]:ml-[var(--sidebar-width-icon)] transition-[margin-left] duration-200 ease-linear"> {/* Added dynamic margin */}
+        <SidebarInset className="ml-[var(--sidebar-width)] group-data-[sidebar-state=collapsed]:ml-[var(--sidebar-width-icon)] transition-[margin-left] duration-200 ease-linear">
           <ScrollArea className="h-full">
             <div className="container mx-auto p-4 md:p-8">
               {currentDocument && currentDocument.type === 'page' ? (
@@ -240,9 +270,11 @@ export default function DocumentPage() {
                           ))}
                         </div>
                         <CardTitle className="text-3xl font-bold">{currentDocument.name}</CardTitle>
-                        <CardDescription>
-                          Last updated: {new Date().toLocaleDateString()} {/* Consider making this dynamic from document data */}
-                        </CardDescription>
+                        {displayDate && (
+                            <CardDescription>
+                                Last updated: {new Date(displayDate).toLocaleDateString()}
+                            </CardDescription>
+                        )}
                       </div>
                        {canEdit && (
                         <div className="flex items-center space-x-2 ml-auto shrink-0 self-start sm:self-center">
@@ -275,7 +307,7 @@ export default function DocumentPage() {
                     ) : (
                       <article className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl dark:prose-invert max-w-none py-4">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {currentDocument.content || `*No content yet.${canEdit ? "" : "" }*`}
+                          {currentDocument.content || `*No content yet.${canEdit ? " Click 'Edit' to start." : "" }*`}
                         </ReactMarkdown>
                         {!currentDocument.content && !canEdit && <p className="mt-4 text-muted-foreground">This page is empty.</p>}
                         {!currentDocument.content && canEdit && !isEditing && 
@@ -285,7 +317,7 @@ export default function DocumentPage() {
                         }
                       </article>
                     )}
-                     {!canEdit && isEditing && ( // Fallback if user somehow gets to edit mode without rights
+                     {!canEdit && isEditing && ( 
                        <article className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl dark:prose-invert max-w-none py-4">
                         <p className="text-destructive">You do not have permission to edit this document. Displaying read-only content.</p>
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -295,29 +327,36 @@ export default function DocumentPage() {
                     )}
                   </CardContent>
                 </Card>
-              ) : (
+              ) : currentDocument ? ( // For org or space nodes
                  <Card className="w-full shadow-md">
                   <CardHeader>
-                    <CardTitle className="text-2xl">
-                      {currentDocument ? currentDocument.name : "Select a document"}
-                    </CardTitle>
-                     {currentDocument && (
-                      <Badge variant="secondary" className="w-fit">{currentDocument.type.toUpperCase()}</Badge>
-                     )}
+                    <div className="text-sm text-muted-foreground mb-1 flex flex-wrap items-center">
+                      {breadcrumbs.map((crumb, index) => (
+                        <span key={crumb.id} className="flex items-center">
+                          <Button variant="link" size="sm" className="p-0 h-auto text-muted-foreground hover:text-primary" onClick={() => handleSelectDocument(crumb.id)}>
+                            {crumb.name}
+                          </Button>
+                          {index < breadcrumbs.length - 1 && <span className="mx-1">/</span>}
+                        </span>
+                      ))}
+                    </div>
+                    <CardTitle className="text-2xl">{currentDocument.name}</CardTitle>
+                    <Badge variant="secondary" className="w-fit">{currentDocument.type.toUpperCase()}</Badge>
                   </CardHeader>
                   <CardContent>
                     <p className="text-muted-foreground">
-                      {currentDocument 
-                        ? `This is ${currentDocument.type === 'organization' ? 'an organization' : 'a space'}. Select a page from the sidebar to view or edit content.`
-                        : "Please select a document from the sidebar to get started or create a new one."}
+                      {`This is ${currentDocument.type === 'organization' ? 'an organization' : 'a space'}. Select an item from the sidebar to view or edit content.`}
                     </p>
-                    {currentDocument && currentDocument.children && currentDocument.children.length > 0 && (
+                    {currentDocument && (
+                      (flatDocumentsList.filter(d => d.parentId === currentDocument.id).length > 0) ? (
                        <div className="mt-4">
                           <h3 className="text-lg font-semibold mb-2">
                             {currentDocument.type === 'organization' ? 'Spaces:' : 'Pages:'}
                           </h3>
                           <ul className="list-disc list-inside">
-                            {currentDocument.children.map(child => (
+                            {flatDocumentsList.filter(d => d.parentId === currentDocument.id)
+                              .sort((a,b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name))
+                              .map(child => (
                               <li key={child.id}>
                                 <Button variant="link" onClick={() => handleSelectDocument(child.id)} className="p-0 h-auto">
                                   {child.name}
@@ -326,16 +365,23 @@ export default function DocumentPage() {
                             ))}
                           </ul>
                        </div>
-                    )}
-                     {!currentDocument && (
-                        <div className="mt-6 text-center">
-                            <Loader2 className="mx-auto h-12 w-12 text-primary/50 animate-spin mb-4" />
-                            <p className="text-muted-foreground">Loading document structure...</p>
-                            <p className="text-sm text-muted-foreground">If this persists, try refreshing or selecting a document from the sidebar.</p>
-                        </div>
-                    )}
+                    ) : (
+                      <p className="mt-4 text-muted-foreground">This {currentDocument.type} is empty.</p>
+                    )
+                   )}
                   </CardContent>
                  </Card>
+              ) : ( // No document selected or found
+                <Card className="w-full shadow-md">
+                  <CardHeader><CardTitle>No Document Selected</CardTitle></CardHeader>
+                  <CardContent>
+                  <div className="mt-6 text-center">
+                      <Loader2 className="mx-auto h-12 w-12 text-primary/50 animate-spin mb-4" />
+                      <p className="text-muted-foreground">Please select a document from the sidebar.</p>
+                      <p className="text-sm text-muted-foreground">If the sidebar is empty, your organization may not have any documents yet.</p>
+                  </div>
+                  </CardContent>
+                </Card>
               )}
             </div>
           </ScrollArea>

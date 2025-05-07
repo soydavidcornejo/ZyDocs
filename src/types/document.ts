@@ -1,8 +1,14 @@
+// src/types/document.ts
+import type { Timestamp } from 'firebase/firestore';
+
 export interface DocumentNode {
-  id: string;
+  id: string; // Firestore document ID
   name: string;
   type: 'organization' | 'space' | 'page';
-  children?: DocumentNode[];
+  parentId?: string | null;
   content?: string; // Content for 'page' type
-  parentId?: string | null; // To help reconstruct path or for breadcrumbs
+  children?: DocumentNode[]; // This will be constructed client-side after fetching
+  createdAt?: Timestamp | Date; 
+  updatedAt?: Timestamp | Date; 
+  order?: number; // Optional: for sorting children
 }

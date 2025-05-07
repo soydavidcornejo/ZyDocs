@@ -10,38 +10,47 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Users, Loader2 } from 'lucide-react';
-
-// Mock data for user directory - replace with actual data fetching
-const mockUsers: UserProfile[] = [
-  { uid: '1', displayName: 'Alice Wonderland', email: 'alice@example.com', photoURL: 'https://picsum.photos/seed/alice/40/40', role: 'admin' },
-  { uid: '2', displayName: 'Bob The Builder', email: 'bob@example.com', photoURL: 'https://picsum.photos/seed/bob/40/40', role: 'editor' },
-  { uid: '3', displayName: 'Charlie Brown', email: 'charlie@example.com', photoURL: 'https://picsum.photos/seed/charlie/40/40', role: 'reader' },
-  { uid: '4', displayName: 'Diana Prince', email: 'diana@example.com', photoURL: null, role: 'reader' },
-];
+import { collection, getDocs, query, orderBy, limit, type Timestamp } from 'firebase/firestore';
+import { db } from '@/lib/firebase/config';
 
 export default function UserDirectoryPage() {
   const { currentUser, loading: authLoading } = useAuth();
   const router = useRouter();
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingData, setLoadingData] = useState(true);
 
   useEffect(() => {
     if (!authLoading && !currentUser) {
       router.push('/login?redirect=/users');
     } else if (currentUser) {
-      // In a real app, fetch users associated with the current user's organization or permissions
-      // For now, using mock data
-      // Add current user to the list if not already there for demo purposes
-      const existingUser = mockUsers.find(u => u.uid === currentUser.uid);
-      let allMockUsers = mockUsers;
-      if (!existingUser) {
-        allMockUsers = [currentUser, ...mockUsers];
-      } else {
-         allMockUsers = mockUsers.map(u => u.uid === currentUser.uid ? currentUser : u);
-      }
-
-      setUsers(allMockUsers);
-      setLoading(false);
+      const fetchUsers = async () => {
+        setLoadingData(true);
+        try {
+          const usersCol = collection(db, 'users');
+          // Example: Order by displayName, limit to 50 for performance. Adjust as needed.
+          const usersQuery = query(usersCol, orderBy('displayName', 'asc'), limit(50));
+          const userSnapshot = await getDocs(usersQuery);
+          const userList = userSnapshot.docs.map(doc => {
+            const data = doc.data() as Omit<UserProfile, 'uid'>; // UID is doc.id
+            // Convert Firestore Timestamps to Date objects for easier handling on client
+            const createdAt = data.createdAt && (data.createdAt as unknown as Timestamp).toDate ? (data.createdAt as unknown as Timestamp).toDate() : undefined;
+            const updatedAt = data.updatedAt && (data.updatedAt as unknown as Timestamp).toDate ? (data.updatedAt as unknown as Timestamp).toDate() : undefined;
+            return { 
+              ...data, 
+              uid: doc.id,
+              createdAt,
+              updatedAt,
+            } as UserProfile;
+          });
+          setUsers(userList);
+        } catch (error) {
+          console.error("Error fetching users:", error);
+          // Handle error (e.g., show toast)
+        } finally {
+          setLoadingData(false);
+        }
+      };
+      fetchUsers();
     }
   }, [currentUser, authLoading, router]);
 
@@ -59,7 +68,7 @@ export default function UserDirectoryPage() {
   
   const roleVariant = (role: UserProfile['role']): "default" | "secondary" | "outline" | "destructive" => {
     switch(role) {
-      case 'admin': return 'default'; // Using primary color for admin
+      case 'admin': return 'default';
       case 'editor': return 'secondary';
       case 'reader': return 'outline';
       default: return 'outline';
@@ -67,11 +76,12 @@ export default function UserDirectoryPage() {
   };
 
 
-  if (authLoading || loading) {
+  if (authLoading || loadingData) {
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /> <span className="ml-2">Loading user directory...</span></div>;
   }
 
   if (!currentUser) {
+    // This is mainly a fallback, the useEffect should redirect.
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Redirecting to login...</div>;
   }
 
