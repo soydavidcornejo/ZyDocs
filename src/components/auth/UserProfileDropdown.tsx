@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { LogOut, User, Users, UserPlus, Settings, Loader2, LogInIcon, Building } from 'lucide-react'; // Added Building
+import { LogOut, User, Users, UserPlus, Settings, Loader2, LogInIcon, Building, ListFilter } from 'lucide-react'; 
 // import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations'; // Potentially for fetching org name
 // import { useEffect, useState } from 'react';
 
@@ -60,6 +60,8 @@ export function UserProfileDropdown() {
     }
     return 'U';
   };
+  
+  const memberships = currentUser.organizationMemberships || [];
 
   return (
     <DropdownMenu>
@@ -88,9 +90,14 @@ export function UserProfileDropdown() {
                     Role: {currentUser.currentOrganizationRole}
                 </p>
             )}
-            {!currentUser.currentOrganizationId && (
-                 <p className="text-xs leading-none text-muted-foreground capitalize pt-1 text-orange-500">
-                    No active organization
+            {!currentUser.currentOrganizationId && memberships.length > 0 && (
+                 <p className="text-xs leading-none text-orange-500 pt-1">
+                    No active organization selected
+                </p>
+            )}
+             {!currentUser.currentOrganizationId && memberships.length === 0 && (
+                 <p className="text-xs leading-none text-orange-500 pt-1">
+                    No organizations joined
                 </p>
             )}
           </div>
@@ -103,17 +110,36 @@ export function UserProfileDropdown() {
           </Link>
         </DropdownMenuItem>
         
+        {/* Organization related items */}
+        {memberships.length > 0 && (
+          <DropdownMenuItem asChild>
+            <Link href="/select-organization">
+              <ListFilter className="mr-2 h-4 w-4" /> 
+              <span>Switch/Select Organization</span>
+            </Link>
+          </DropdownMenuItem>
+        )}
+
+        <DropdownMenuItem asChild>
+            <Link href="/create-organization">
+                <Building className="mr-2 h-4 w-4" />
+                <span>Create Organization</span>
+            </Link>
+        </DropdownMenuItem>
+
         {currentUser.currentOrganizationId && (
           <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs text-muted-foreground px-2">Current Organization</DropdownMenuLabel>
             <DropdownMenuItem asChild>
-              <Link href="/users"> {/* Should be /organization/users or similar context */}
+              <Link href="/users"> 
                 <Users className="mr-2 h-4 w-4" />
-                <span>Organization Members</span>
+                <span>Members</span>
               </Link>
             </DropdownMenuItem>
             {(currentUser.currentOrganizationRole === 'admin' || currentUser.currentOrganizationRole === 'editor') && (
               <DropdownMenuItem asChild>
-                <Link href="/invite"> {/* Should be /organization/invite */}
+                <Link href="/invite"> 
                   <UserPlus className="mr-2 h-4 w-4" />
                   <span>Invite Users</span>
                 </Link>
@@ -121,22 +147,16 @@ export function UserProfileDropdown() {
             )}
             {currentUser.currentOrganizationRole === 'admin' && (
               <DropdownMenuItem asChild>
+                {/* TODO: This link needs to be dynamic to the current org ID */}
                 <Link href={`/organization/${currentUser.currentOrganizationId}/settings`}>
                   <Settings className="mr-2 h-4 w-4" />
-                  <span>Organization Settings</span>
+                  <span>Settings</span>
                 </Link>
               </DropdownMenuItem>
             )}
           </>
         )}
-        {!currentUser.currentOrganizationId && (
-            <DropdownMenuItem asChild>
-                <Link href="/create-organization">
-                    <Building className="mr-2 h-4 w-4" />
-                    <span>Create Organization</span>
-                </Link>
-            </DropdownMenuItem>
-        )}
+       
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={logout}>
           <LogOut className="mr-2 h-4 w-4" />

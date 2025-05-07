@@ -15,7 +15,7 @@ import { updateUserActiveOrganization } from '@/lib/firebase/firestore/users';
 import { Loader2, Building } from 'lucide-react';
 
 export default function CreateOrganizationPage() {
-  const { currentUser, loading: authLoading, refreshUserProfile, requiresOrganizationCreation, setRequiresOrganizationCreation } = useAuth();
+  const { currentUser, loading: authLoading, refreshUserProfile, selectActiveOrganization } = useAuth(); // Removed setRequiresOrganizationCreation as it's handled in AuthContext
   const router = useRouter();
   const { toast } = useToast();
   const [organizationName, setOrganizationName] = useState('');
@@ -25,12 +25,9 @@ export default function CreateOrganizationPage() {
     if (!authLoading && !currentUser) {
       router.push('/login?redirect=/create-organization');
     }
-    // If user lands here but already has an org, or requirement is false, redirect.
-    if (!authLoading && currentUser && currentUser.currentOrganizationId && !requiresOrganizationCreation) {
-        toast({ title: "Organization Exists", description: "You are already part of an organization.", variant: "default"});
-        router.push('/docs');
-    }
-  }, [currentUser, authLoading, router, requiresOrganizationCreation, toast]);
+    // No longer redirecting if user already has an org, they can create more.
+    // Redirection to /select-organization or /docs if they have an active org is handled by AppLayout
+  }, [currentUser, authLoading, router]);
 
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -47,18 +44,17 @@ export default function CreateOrganizationPage() {
     setIsSubmitting(true);
     try {
       const orgId = await createOrganizationInFirestore(organizationName.trim(), currentUser.uid);
+      // Creator automatically becomes an admin of the new organization
       await addOrganizationMember(orgId, currentUser.uid, 'admin', 'active');
-      await updateUserActiveOrganization(currentUser.uid, orgId);
+      // Automatically select the newly created organization as active
+      await selectActiveOrganization(orgId); 
       
-      // Important: Refresh user profile in context to get new active org and role
-      await refreshUserProfile(); 
-      setRequiresOrganizationCreation(false); // Explicitly set this off
-
       toast({
         title: 'Organization Created!',
-        description: `"${organizationName.trim()}" has been successfully created.`,
+        description: `"${organizationName.trim()}" has been successfully created and set as active.`,
       });
-      router.push('/docs'); // Redirect to the main app/docs page
+      // selectActiveOrganization will also trigger refreshUserProfile and navigation to /docs
+      // router.push('/docs'); // This is handled by selectActiveOrganization now
     } catch (error) {
       console.error('Error creating organization:', error);
       toast({
@@ -71,7 +67,7 @@ export default function CreateOrganizationPage() {
     }
   };
   
-  if (authLoading || (!currentUser && !authLoading)) { // Show loader if auth is loading or if no current user yet (might be redirecting)
+  if (authLoading || (!currentUser && !authLoading)) { 
     return (
         <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -80,15 +76,15 @@ export default function CreateOrganizationPage() {
     );
   }
   
-  // If still requires org creation after loading and current user is available
-  if (currentUser && !currentUser.currentOrganizationId && requiresOrganizationCreation) {
+  // Render form if user is logged in, regardless of existing organizations
+  if (currentUser) {
     return (
       <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-gradient-to-br from-background to-secondary/30 p-4">
         <Card className="w-full max-w-md shadow-xl">
           <CardHeader className="text-center">
             <Building className="mx-auto h-12 w-12 text-primary" />
-            <CardTitle className="mt-4 text-2xl font-bold">Create Your Organization</CardTitle>
-            <CardDescription>Let's get your team started on ZyDocs. Give your organization a name.</CardDescription>
+            <CardTitle className="mt-4 text-2xl font-bold">Create New Organization</CardTitle>
+            <CardDescription>Set up a new workspace for your team or project.</CardDescription>
           </CardHeader>
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-6">
@@ -98,7 +94,7 @@ export default function CreateOrganizationPage() {
                   id="organizationName"
                   value={organizationName}
                   onChange={(e) => setOrganizationName(e.target.value)}
-                  placeholder="e.g., Acme Corp, My Awesome Team"
+                  placeholder="e.g., My New Venture, Project Phoenix"
                   disabled={isSubmitting}
                   required
                 />
@@ -116,18 +112,7 @@ export default function CreateOrganizationPage() {
     );
   }
 
-  // Fallback if state is somehow inconsistent, should be handled by useEffect redirect
-  if (currentUser && currentUser.currentOrganizationId && !requiresOrganizationCreation){
-    // User already has an org, they shouldn't be here. Redirecting via useEffect.
-    return (
-        <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
-             <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <span className="ml-2">Redirecting...</span>
-        </div>
-    );
-  }
-
-  // If user is not logged in and not loading (should be redirected by useEffect)
+  // Fallback if user is not logged in (should be redirected by useEffect)
   return (
       <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
           <p>Please log in to continue.</p>

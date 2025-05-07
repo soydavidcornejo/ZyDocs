@@ -17,16 +17,20 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && currentUser) {
-      if (requiresOrganizationCreation) {
+      const memberships = currentUser.organizationMemberships || [];
+      if (memberships.length === 0) { // This means requiresOrganizationCreation should be true
         router.push('/create-organization');
-      } else if (redirectPath && redirectPath !== '/create-organization') {
+      } else if (memberships.length > 0 && !currentUser.currentOrganizationId) {
+        // Has orgs, but no active one selected
+        router.push('/select-organization');
+      } else if (redirectPath && redirectPath !== '/create-organization' && redirectPath !== '/select-organization') {
         router.push(redirectPath);
       } else if (currentUser.currentOrganizationId) {
-         router.push('/docs'); // Default to docs if org exists
+         router.push('/docs'); // Default to docs if org exists and is active
       } else {
-        // This case should ideally be handled by requiresOrganizationCreation
-        // but as a fallback, go to create org if no specific redirect and no org.
-        router.push('/create-organization');
+        // Fallback, should ideally be covered by above conditions.
+        // If somehow here, means has orgs, has active one, but no redirect path.
+        router.push('/docs'); 
       }
     }
   }, [currentUser, loading, router, redirectPath, requiresOrganizationCreation]);

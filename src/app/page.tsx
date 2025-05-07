@@ -16,12 +16,16 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!loading && currentUser) {
-      if (requiresOrganizationCreation) {
+      const memberships = currentUser.organizationMemberships || [];
+      if (memberships.length === 0) { // Corresponds to requiresOrganizationCreation
         router.push('/create-organization');
+      } else if (memberships.length > 0 && !currentUser.currentOrganizationId) {
+        // Has orgs, but no active one selected
+        router.push('/select-organization');
       } else if (currentUser.currentOrganizationId) {
-        router.push('/docs'); // Or /docs/activeOrgId if preferred
+        router.push('/docs');
       }
-      // If no org and not requiring creation (edge case), they stay on home or go to profile.
+      // If none of the above, user stays on home page (e.g. error state or unexpected scenario)
     }
   }, [currentUser, loading, requiresOrganizationCreation, router]);
 
@@ -34,8 +38,13 @@ export default function HomePage() {
     );
   }
   
-  // If user is logged in and being redirected by useEffect
-  if (currentUser && (requiresOrganizationCreation || currentUser.currentOrganizationId)) {
+  // If user is logged in and redirection is in progress via useEffect
+  if (currentUser && 
+      ( (currentUser.organizationMemberships || []).length === 0 || // requiresOrganizationCreation
+        ((currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId) ||
+        currentUser.currentOrganizationId 
+      )
+     ) {
      return (
       <div className="flex flex-col items-center justify-center min-h-[calc(100vh-4rem)] bg-gradient-to-br from-background to-secondary/30 py-12 px-4">
         <Loader2 className="h-12 w-12 animate-spin text-primary" />
@@ -57,7 +66,12 @@ export default function HomePage() {
         </p>
         <div className="mt-10 flex items-center justify-center gap-x-6">
           <Button asChild size="lg" className="shadow-lg hover:shadow-primary/50 transition-shadow">
-            <Link href={currentUser ? (requiresOrganizationCreation ? "/create-organization" : "/docs") : "/login"}>
+            {/* Link destination dynamically determined by auth state */}
+            <Link href={currentUser ? 
+                          ( (currentUser.organizationMemberships || []).length === 0 ? "/create-organization" : 
+                            ((currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId ? "/select-organization" : "/docs") 
+                          ) 
+                          : "/login"}>
               Get Started <ArrowRight className="ml-2 h-5 w-5" />
             </Link>
           </Button>

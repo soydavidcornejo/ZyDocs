@@ -2,31 +2,41 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation'; // Added usePathname
 import { useAuth } from '@/contexts/AuthContext';
 import { Loader2 } from 'lucide-react';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { currentUser, loading, requiresOrganizationCreation } = useAuth();
   const router = useRouter();
+  const pathname = usePathname(); // Get current pathname
 
   useEffect(() => {
     if (!loading) {
       if (!currentUser) {
-        // Allow query params for redirect to be passed along
-        const currentPath = window.location.pathname + window.location.search;
+        const currentPath = pathname + window.location.search;
         router.push(`/login?redirect=${encodeURIComponent(currentPath)}`);
-      } else if (requiresOrganizationCreation && window.location.pathname !== '/create-organization') {
-        router.push('/create-organization');
-      } else if (currentUser && !currentUser.currentOrganizationId && !requiresOrganizationCreation && window.location.pathname !== '/create-organization') {
-        // This might happen if user navigates away from create-org before finishing
-        // Or if state is somehow inconsistent.
-        router.push('/create-organization');
+      } else {
+        const memberships = currentUser.organizationMemberships || [];
+        if (memberships.length === 0 && pathname !== '/create-organization') {
+          // User has NO organizations, must create one.
+          router.push('/create-organization');
+        } else if (memberships.length > 0 && !currentUser.currentOrganizationId && pathname !== '/select-organization' && pathname !== '/create-organization') {
+          // User HAS organizations, but NO active one selected. Must select or create.
+          router.push('/select-organization');
+        }
       }
     }
-  }, [currentUser, loading, requiresOrganizationCreation, router]);
+  }, [currentUser, loading, router, pathname]); // Added pathname to dependencies
 
-  if (loading || (!currentUser && !loading) || (currentUser && requiresOrganizationCreation && window.location.pathname !== '/create-organization') || (currentUser && !currentUser.currentOrganizationId && !requiresOrganizationCreation && window.location.pathname !== '/create-organization') ) {
+  const isUserLoading = loading || (!currentUser && !loading);
+  const needsOrgCreation = currentUser && (currentUser.organizationMemberships || []).length === 0;
+  const needsOrgSelection = currentUser && (currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId;
+
+  if (isUserLoading || 
+      (needsOrgCreation && pathname !== '/create-organization') ||
+      (needsOrgSelection && pathname !== '/select-organization' && pathname !== '/create-organization')
+     ) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -35,20 +45,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   }
   
-  // If currentUser exists, has an org, and not in org creation flow, render children
-  if (currentUser && currentUser.currentOrganizationId && !requiresOrganizationCreation) {
+  // If currentUser exists, and has an active organization
+  if (currentUser && currentUser.currentOrganizationId) {
     return <>{children}</>;
   }
 
-  // Fallback for any other state, typically means one of the conditions above for loading screen is met
-  // Or user is on create-organization page itself.
-  if (window.location.pathname === '/create-organization' && currentUser && requiresOrganizationCreation) {
+  // If user is on a page that is allowed during org creation/selection
+  if ( (pathname === '/create-organization' && (needsOrgCreation || currentUser)) || // Allow if needs creation OR just wants to create another
+       (pathname === '/select-organization' && needsOrgSelection) 
+     ) {
     return <>{children}</>;
   }
   
-  // If loading is false, currentUser exists, but conditions for rendering children or create-org are not met,
-  // this implies redirection is happening or an unexpected state.
-  // The loading screen will cover most cases.
+  // Fallback loading/redirecting screen
   return (
      <div className="flex h-screen items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
