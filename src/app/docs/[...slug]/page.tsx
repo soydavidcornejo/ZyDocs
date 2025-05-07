@@ -2,7 +2,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter, usePathname } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DocumentTree } from "@/components/document/DocumentTree";
@@ -10,9 +12,8 @@ import WysiwygEditor from "@/components/editor/WysiwygEditor";
 import { initialDocumentsData, findDocument } from "@/config/docs";
 import type { DocumentNode } from "@/types/document";
 import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarTrigger, SidebarInset, SidebarRail, SidebarFooter } from "@/components/ui/sidebar";
-import { ThemeToggle } from '@/components/ThemeToggle'; // Assuming you might want theme toggle here too
 import { Button } from '@/components/ui/button';
-import { Save, PlusCircle } from 'lucide-react';
+import { Save, PlusCircle, Edit } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from '@/components/ui/badge';
 
@@ -22,7 +23,7 @@ const saveDocumentContent = async (documentId: string, content: string): Promise
   // In a real app, this would be an API call.
   // For now, let's simulate a delay and success.
   await new Promise(resolve => setTimeout(resolve, 500));
-  // Update mock data (this won't persist across reloads without a backend)
+  
   const updateNodeContent = (nodes: DocumentNode[], id: string, newContent: string): boolean => {
     for (const node of nodes) {
       if (node.id === id) {
@@ -43,12 +44,12 @@ const saveDocumentContent = async (documentId: string, content: string): Promise
 export default function DocumentPage() {
   const params = useParams();
   const router = useRouter();
-  const pathname = usePathname();
   const { toast } = useToast();
   
   const [currentDocument, setCurrentDocument] = useState<DocumentNode | null>(null);
   const [editedContent, setEditedContent] = useState<string>('');
-  const [allDocuments, setAllDocuments] = useState<DocumentNode[]>(initialDocumentsData); // Manage state for documents
+  const [allDocuments, setAllDocuments] = useState<DocumentNode[]>(initialDocumentsData);
+  const [isEditing, setIsEditing] = useState<boolean>(false);
 
   const documentId = params.slug ? (Array.isArray(params.slug) ? params.slug[params.slug.length -1] : params.slug) : null;
 
@@ -57,8 +58,8 @@ export default function DocumentPage() {
       const doc = findDocument(allDocuments, documentId);
       setCurrentDocument(doc);
       setEditedContent(doc?.content || '');
+      setIsEditing(false); // Reset to view mode when document changes
     } else if (allDocuments.length > 0 && allDocuments[0].children && allDocuments[0].children[0].children && allDocuments[0].children[0].children[0]) {
-      // Default to the first page of the first space of the first org if no ID
       const firstPageId = allDocuments[0].children[0].children[0].id;
       router.push(`/docs/${firstPageId}`);
     }
@@ -72,7 +73,6 @@ export default function DocumentPage() {
     if (currentDocument) {
       const success = await saveDocumentContent(currentDocument.id, editedContent);
       if (success) {
-        // Update the document in the local state
         const updatedDocuments = allDocuments.map(org => ({
           ...org,
           children: org.children?.map(space => ({
@@ -84,6 +84,7 @@ export default function DocumentPage() {
         }));
         setAllDocuments(updatedDocuments);
         setCurrentDocument(prev => prev ? {...prev, content: editedContent} : null);
+        setIsEditing(false); // Switch back to view mode
 
         toast({
           title: "Content Saved",
@@ -101,7 +102,7 @@ export default function DocumentPage() {
   };
 
   const handleSelectDocument = (id: string) => {
-     if (currentDocument && editedContent !== currentDocument.content) {
+     if (isEditing && currentDocument && editedContent !== currentDocument.content) {
       if(confirm("You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.")) {
         router.push(`/docs/${id}`);
       }
@@ -138,8 +139,8 @@ export default function DocumentPage() {
 
   return (
     <SidebarProvider defaultOpen>
-      <div className="flex min-h-[calc(100vh-4rem)]">
-        <Sidebar collapsible="icon" className="border-r">
+      <div className="flex h-[calc(100vh-4rem)]"> {/* Ensure full height below header */}
+        <Sidebar collapsible="icon" className="border-r top-0"> {/* Ensure sidebar starts from top */}
           <SidebarHeader>
             <div className="flex items-center justify-between w-full">
                <h2 className="text-lg font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
@@ -157,11 +158,13 @@ export default function DocumentPage() {
               />
             </ScrollArea>
           </SidebarContent>
-          <SidebarFooter className="group-data-[collapsible=icon]:hidden">
-            <Button variant="outline" size="sm" className="w-full">
-              <PlusCircle className="mr-2 h-4 w-4" /> New Page
-            </Button>
-          </SidebarFooter>
+          {SidebarFooter && ( // Conditional rendering for SidebarFooter if it might not always exist
+            <SidebarFooter className="group-data-[collapsible=icon]:hidden">
+              <Button variant="outline" size="sm" className="w-full">
+                <PlusCircle className="mr-2 h-4 w-4" /> New Page
+              </Button>
+            </SidebarFooter>
+          )}
         </Sidebar>
         <SidebarRail />
 
@@ -172,7 +175,7 @@ export default function DocumentPage() {
                 <Card className="w-full shadow-md">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
-                      <div className="space-y-1">
+                      <div className="space-y-1 flex-grow">
                         <div className="text-sm text-muted-foreground mb-1">
                           {breadcrumbs.map((crumb, index) => (
                             <span key={crumb.id}>
@@ -188,17 +191,31 @@ export default function DocumentPage() {
                           Last updated: {new Date().toLocaleDateString()}
                         </CardDescription>
                       </div>
-                      <Button onClick={handleSaveContent} disabled={editedContent === currentDocument.content}>
-                        <Save className="mr-2 h-4 w-4" /> Save Changes
-                      </Button>
+                      {isEditing ? (
+                        <Button onClick={handleSaveContent} disabled={editedContent === currentDocument.content}>
+                          <Save className="mr-2 h-4 w-4" /> Save Changes
+                        </Button>
+                      ) : (
+                        <Button onClick={() => setIsEditing(true)}>
+                          <Edit className="mr-2 h-4 w-4" /> Edit
+                        </Button>
+                      )}
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <WysiwygEditor
-                      key={currentDocument.id} // Force re-render on document change
-                      initialContent={currentDocument.content || ''}
-                      onContentChange={handleContentChange}
-                    />
+                    {isEditing ? (
+                      <WysiwygEditor
+                        key={currentDocument.id} 
+                        initialContent={currentDocument.content || ''}
+                        onContentChange={handleContentChange}
+                      />
+                    ) : (
+                      <article className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl dark:prose-invert max-w-none py-4">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {currentDocument.content || "*No content yet. Click 'Edit' to start writing.*"}
+                        </ReactMarkdown>
+                      </article>
+                    )}
                   </CardContent>
                 </Card>
               ) : (
