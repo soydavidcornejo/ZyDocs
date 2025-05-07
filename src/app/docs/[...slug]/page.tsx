@@ -6,7 +6,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DocumentTree } from "@/components/document/DocumentTree";
 import WysiwygEditor from "@/components/editor/WysiwygEditor";
 import { initialDocumentsData, findDocument } from "@/config/docs";
@@ -72,20 +72,22 @@ export default function DocumentPage() {
         if (doc) {
           setEditedContent(doc.content || '');
         }
-        setIsEditing(false); // Reset to view mode when document changes
+        // Ensure canEdit check happens after currentUser is confirmed
+        const userCanEdit = currentUser.role === 'admin' || currentUser.role === 'editor';
+        setIsEditing(searchParams.get('edit') === 'true' && userCanEdit);
       } else if (allDocuments.length > 0 && allDocuments[0]?.children?.[0]?.children?.[0]) {
         const firstPageId = allDocuments[0].children[0].children[0].id;
         router.push(`/docs/${firstPageId}`);
       }
     }
-  }, [documentId, allDocuments, router, currentUser]);
+  }, [documentId, allDocuments, router, currentUser, searchParams]);
 
   const handleContentChange = useCallback((content: string) => {
     setEditedContent(content);
   }, []);
 
   const handleSaveContent = async () => {
-    if (currentDocument) {
+    if (currentDocument && canEdit) {
       setIsSaving(true);
       const success = await saveDocumentContent(currentDocument.id, editedContent);
       setIsSaving(false);
@@ -101,7 +103,8 @@ export default function DocumentPage() {
         }));
         setAllDocuments(updatedDocuments);
         setCurrentDocument(prev => prev ? {...prev, content: editedContent} : null);
-        setIsEditing(false); // Switch back to view mode
+        router.push(`/docs/${currentDocument.id}`, { scroll: false }); // Remove ?edit=true
+        setIsEditing(false);
 
         toast({
           title: "Content Saved",
@@ -118,10 +121,18 @@ export default function DocumentPage() {
     }
   };
   
+  const handleEnterEditMode = () => {
+    if (canEdit) {
+      router.push(`/docs/${documentId}?edit=true`, { scroll: false });
+      setIsEditing(true);
+    }
+  };
+
   const handleCancelEdit = () => {
     if (currentDocument) {
       setEditedContent(currentDocument.content || ''); // Reset to original content
     }
+    router.push(`/docs/${documentId}`, { scroll: false }); // Remove ?edit=true
     setIsEditing(false);
     toast({
       title: "Editing Cancelled",
@@ -133,12 +144,12 @@ export default function DocumentPage() {
   const handleSelectDocument = (id: string) => {
      if (isEditing && currentDocument && editedContent !== currentDocument.content) {
       if(confirm("You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.")) {
-        setIsEditing(false); // Reset editing state before navigating
-        setEditedContent(currentDocument.content || ''); // Revert changes
-        router.push(`/docs/${id}`);
+        router.push(`/docs/${id}`); 
+        setIsEditing(false); // Explicitly set isEditing to false on navigation
       }
     } else {
       router.push(`/docs/${id}`);
+      setIsEditing(false); // Also ensure edit mode is off if no unsaved changes
     }
   };
   
@@ -182,7 +193,7 @@ export default function DocumentPage() {
   return (
     <SidebarProvider defaultOpen>
       <div className="flex h-[calc(100vh-4rem)]"> {/* Ensure full height below header */}
-        <Sidebar collapsible="icon" className="border-r"> {/* Sidebar will be positioned by its own fixed logic */}
+        <Sidebar collapsible="icon" className="border-r fixed h-full z-20"> {/* Sidebar will be positioned by its own fixed logic, ensure it's above content */}
           <SidebarHeader>
             <div className="flex items-center justify-between w-full">
                <h2 className="text-lg font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
@@ -208,9 +219,9 @@ export default function DocumentPage() {
             </SidebarFooter>
           )}
         </Sidebar>
-        <SidebarRail />
+        <SidebarRail className="fixed z-20" /> {/* Ensure rail is also above potentially overlapping content */}
 
-        <SidebarInset>
+        <SidebarInset className="ml-[var(--sidebar-width)] group-data-[sidebar-state=collapsed]:ml-[var(--sidebar-width-icon)] transition-[margin-left] duration-200 ease-linear"> {/* Added dynamic margin */}
           <ScrollArea className="h-full">
             <div className="container mx-auto p-4 md:p-8">
               {currentDocument && currentDocument.type === 'page' ? (
@@ -230,14 +241,14 @@ export default function DocumentPage() {
                         </div>
                         <CardTitle className="text-3xl font-bold">{currentDocument.name}</CardTitle>
                         <CardDescription>
-                          Last updated: {new Date().toLocaleDateString()}
+                          Last updated: {new Date().toLocaleDateString()} {/* Consider making this dynamic from document data */}
                         </CardDescription>
                       </div>
-                      {canEdit && (
+                       {canEdit && (
                         <div className="flex items-center space-x-2 ml-auto shrink-0 self-start sm:self-center">
                           {isEditing ? (
                             <>
-                              <Button onClick={handleSaveContent} disabled={!currentDocument || editedContent === currentDocument.content || isSaving}>
+                              <Button onClick={handleSaveContent} disabled={isSaving || (currentDocument && editedContent === currentDocument.content)}>
                                 {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                                 {isSaving ? "Saving..." : "Save"}
                               </Button>
@@ -246,12 +257,7 @@ export default function DocumentPage() {
                               </Button>
                             </>
                           ) : (
-                            <Button onClick={() => {
-                              if (currentDocument) { 
-                                setEditedContent(currentDocument.content || '');
-                                setIsEditing(true);
-                              }
-                            }}>
+                            <Button onClick={handleEnterEditMode}>
                               <Edit className="mr-2 h-4 w-4" /> Edit
                             </Button>
                           )}
@@ -269,13 +275,19 @@ export default function DocumentPage() {
                     ) : (
                       <article className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl dark:prose-invert max-w-none py-4">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {currentDocument.content || `*No content yet.${canEdit ? " Click 'Edit' to start writing." : "" }*`}
+                          {currentDocument.content || `*No content yet.${canEdit ? "" : "" }*`}
                         </ReactMarkdown>
+                        {!currentDocument.content && !canEdit && <p className="mt-4 text-muted-foreground">This page is empty.</p>}
+                        {!currentDocument.content && canEdit && !isEditing && 
+                          <Button onClick={handleEnterEditMode} variant="outline" className="mt-4">
+                            <Edit className="mr-2 h-4 w-4" /> Start Editing
+                          </Button>
+                        }
                       </article>
                     )}
-                    {!canEdit && isEditing && ( // Show read-only view if user loses edit rights while editing
+                     {!canEdit && isEditing && ( // Fallback if user somehow gets to edit mode without rights
                        <article className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl dark:prose-invert max-w-none py-4">
-                        <p className="text-destructive">You no longer have permission to edit this document. Displaying read-only content.</p>
+                        <p className="text-destructive">You do not have permission to edit this document. Displaying read-only content.</p>
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {currentDocument.content || "*No content yet.*"}
                         </ReactMarkdown>
