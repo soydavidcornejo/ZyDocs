@@ -8,7 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { ListChecks, PlusCircle, Loader2, Building, Settings, LogOutIcon as LeaveIcon, ExternalLink } from 'lucide-react';
+import { ListChecks, PlusCircle, Loader2, Building, Settings, LogOutIcon as LeaveIcon, ExternalLink, BookOpenText } from 'lucide-react';
 import type { OrganizationMember } from '@/types/organization';
 import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations';
 import { useToast } from '@/hooks/use-toast';
@@ -141,7 +141,11 @@ export default function OrganizationsPage() {
                 </div>
               </CardHeader>
               <CardContent className="flex-grow">
-                {/* Add more org details here if needed, e.g., number of members */}
+                 <Button variant="outline" className="w-full mb-2" asChild>
+                   <Link href={`/organization/${org.organizationId}/wiki`}>
+                    <BookOpenText className="mr-2 h-4 w-4" /> View Wiki
+                   </Link>
+                </Button>
               </CardContent>
               <CardFooter className="flex flex-col space-y-2 pt-4 border-t">
                 <Button
@@ -219,4 +223,3 @@ export default function OrganizationsPage() {
     </div>
   );
 }
-

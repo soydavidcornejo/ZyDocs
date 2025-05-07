@@ -26,7 +26,9 @@ export default function RootLayout({
         <AuthProvider>
           <div className="flex flex-col min-h-screen">
             <Header />
-            <main className="flex-grow pt-16">{/* Ensure content starts below fixed header */}
+            {/* pt-16 ensures content starts below the fixed header (h-16) */}
+            {/* The main content area itself will manage its internal layout (e.g. with sidebars) */}
+            <main className="flex-grow pt-16 flex flex-col"> 
               {children}
             </main>
             <Toaster />
