@@ -13,6 +13,7 @@ import { createOrganizationInFirestore } from '@/lib/firebase/firestore/organiza
 import { addOrganizationMember } from '@/lib/firebase/firestore/organizationMembers';
 import { updateUserActiveOrganization } from '@/lib/firebase/firestore/users';
 import { Loader2, Building } from 'lucide-react';
+import type { UserRole } from '@/types/user';
 
 export default function CreateOrganizationPage() {
   const { currentUser, loading: authLoading, refreshUserProfile, selectActiveOrganization } = useAuth(); // Removed setRequiresOrganizationCreation as it's handled in AuthContext
@@ -45,7 +46,8 @@ export default function CreateOrganizationPage() {
     try {
       const orgId = await createOrganizationInFirestore(organizationName.trim(), currentUser.uid);
       // Creator automatically becomes an admin of the new organization
-      await addOrganizationMember(orgId, currentUser.uid, 'admin', 'active');
+      const creatorRoleForNewOrg: UserRole = 'admin';
+      await addOrganizationMember(orgId, currentUser.uid, creatorRoleForNewOrg, 'active');
       // Automatically select the newly created organization as active
       await selectActiveOrganization(orgId); 
       
