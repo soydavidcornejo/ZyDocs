@@ -27,8 +27,8 @@ export function LoginPageClient() {
         // Has organizations, but no active one selected
         router.push('/organizations');
       } else if (currentUser.currentOrganizationId) {
-        // Has an active organization
-         router.push('/docs'); 
+        // Has an active organization, redirect to organizations page
+         router.push('/organizations'); 
       } else {
         // Fallback for any other scenario where user is logged in but no clear next step
         // e.g. if redirectPath was one of the excluded ones but other conditions didn't match
@@ -74,3 +74,4 @@ export function LoginPageClient() {
     </div>
   );
 }
+

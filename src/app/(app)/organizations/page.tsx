@@ -64,8 +64,8 @@ export default function OrganizationsPage() {
   const handleSelectOrganization = async (organizationId: string) => {
     setIsProcessing(organizationId);
     await selectActiveOrganization(organizationId);
-    // selectActiveOrganization handles routing to /docs.
-    // setIsProcessing(null) might not be reached if routing is too fast.
+    // selectActiveOrganization handles routing to /organizations (now).
+    // setIsProcessing(null) might not be reached if routing is too fast, but it's fine.
   };
 
   const handleLeaveOrganization = async (organizationId: string, organizationName?: string) => {
@@ -150,8 +150,8 @@ export default function OrganizationsPage() {
                   className="w-full"
                   variant={currentUser?.currentOrganizationId === org.organizationId ? "secondary" : "default"}
                 >
-                  {isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
-                  {currentUser?.currentOrganizationId === org.organizationId ? 'Go to Dashboard' : 'Set Active & View Docs'}
+                  {isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (currentUser?.currentOrganizationId !== org.organizationId ? <ExternalLink className="mr-2 h-4 w-4" /> : null)}
+                  {currentUser?.currentOrganizationId === org.organizationId ? 'Currently Active' : 'Set Active'}
                 </Button>
                 <div className="flex w-full space-x-2">
                   {org.role === 'admin' && (
@@ -219,3 +219,4 @@ export default function OrganizationsPage() {
     </div>
   );
 }
+

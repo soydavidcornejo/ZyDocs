@@ -187,7 +187,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
         await updateUserActiveOrgInFirestore(firebaseUser.uid, organizationId);
         await refreshUserProfile(); 
-        router.push('/docs'); 
+        router.push('/organizations'); // Changed from /docs
     } catch (error) {
         console.error("Error selecting active organization:", error);
         toast({ title: "Error", description: "Could not switch organization.", variant: "destructive" });
@@ -327,3 +327,4 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
+

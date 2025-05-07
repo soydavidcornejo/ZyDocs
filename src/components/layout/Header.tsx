@@ -14,9 +14,6 @@ export function Header() {
           <span className="font-bold text-xl">ZyDocs</span>
         </Link>
         <nav className="hidden md:flex items-center space-x-1">
-          <Button variant="ghost" asChild size="sm">
-            <Link href="/docs/org1">Docs</Link>
-          </Button>
            <Button variant="ghost" asChild size="sm">
             <Link href="/features">Features</Link>
           </Button>

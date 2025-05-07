@@ -23,7 +23,7 @@ export default function HomePage() {
         // Has orgs, but no active one selected
         router.push('/organizations');
       } else if (currentUser.currentOrganizationId) {
-        router.push('/docs');
+        router.push('/organizations'); // Changed from /docs
       }
       // If none of the above, user stays on home page (e.g. error state or unexpected scenario)
     }
@@ -69,7 +69,7 @@ export default function HomePage() {
             {/* Link destination dynamically determined by auth state */}
             <Link href={currentUser ? 
                           ( requiresOrganizationCreation ? "/create-organization" : 
-                            (((currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId) ? "/organizations" : "/docs") 
+                            (((currentUser.organizationMemberships || []).length > 0 && !currentUser.currentOrganizationId) ? "/organizations" : "/organizations") // Changed from /docs
                           ) 
                           : "/login"}>
               Get Started <ArrowRight className="ml-2 h-5 w-5" />
@@ -136,3 +136,4 @@ function FeatureCard({ icon, title, description }: FeatureCardProps) {
     </Card>
   );
 }
+
