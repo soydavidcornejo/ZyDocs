@@ -3,9 +3,32 @@ import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 // import { getFirestore } from "firebase/firestore"; // Uncomment if you need Firestore
 
-// Your web app's Firebase configuration
-// IMPORTANT: Replace with your actual Firebase project configuration.
-// Store these in .env.local and ensure NEXT_PUBLIC_ prefix for client-side access.
+// ----------------------------------------------------------------------------------
+// IMPORTANT: Firebase Configuration Error (auth/api-key-not-valid)
+// ----------------------------------------------------------------------------------
+// If you are seeing an error like "Firebase: Error (auth/api-key-not-valid...)",
+// it means your Firebase API key is missing or incorrect.
+//
+// TO FIX THIS:
+// 1. Create a file named `.env.local` in the root directory of your project (next to `package.json`).
+// 2. Copy the contents from `.env.local.example` (if it exists) or use the template below
+//    into your new `.env.local` file.
+// 3. Replace the placeholder values (e.g., "your-api-key") with your *actual* Firebase
+//    project credentials. You can find these in your Firebase project settings on the
+//    Firebase console.
+// 4. Ensure all environment variables intended for client-side use are prefixed with `NEXT_PUBLIC_`.
+// 5. Restart your development server (e.g., `npm run dev`) after creating or modifying
+//    the `.env.local` file.
+//
+// Example .env.local content:
+// NEXT_PUBLIC_FIREBASE_API_KEY="your-actual-api-key"
+// NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="your-actual-auth-domain"
+// NEXT_PUBLIC_FIREBASE_PROJECT_ID="your-actual-project-id"
+// NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET="your-actual-storage-bucket"
+// NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="your-actual-messaging-sender-id"
+// NEXT_PUBLIC_FIREBASE_APP_ID="your-actual-app-id"
+// ----------------------------------------------------------------------------------
+
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "your-api-key",
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "your-auth-domain",
