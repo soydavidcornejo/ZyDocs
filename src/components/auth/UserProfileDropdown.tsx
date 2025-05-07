@@ -13,10 +13,27 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { LogOut, User, Users, UserPlus, Settings, Loader2, LogInIcon } from 'lucide-react';
+import { LogOut, User, Users, UserPlus, Settings, Loader2, LogInIcon, Building } from 'lucide-react'; // Added Building
+// import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations'; // Potentially for fetching org name
+// import { useEffect, useState } from 'react';
+
 
 export function UserProfileDropdown() {
   const { currentUser, logout, loading } = useAuth();
+  // const [organizationName, setOrganizationName] = useState<string | null>(null);
+
+  // useEffect(() => {
+  //   if (currentUser?.currentOrganizationId) {
+  //     getOrganizationDetails(currentUser.currentOrganizationId)
+  //       .then(org => {
+  //         if (org) setOrganizationName(org.name);
+  //       })
+  //       .catch(console.error);
+  //   } else {
+  //     setOrganizationName(null);
+  //   }
+  // }, [currentUser?.currentOrganizationId]);
+
 
   if (loading) {
      return <Button variant="ghost" size="icon" disabled className="h-8 w-8 rounded-full flex items-center justify-center"><Loader2 className="h-4 w-4 animate-spin" /></Button>;
@@ -54,14 +71,28 @@ export function UserProfileDropdown() {
           </Avatar>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-56" align="end" forceMount>
+      <DropdownMenuContent className="w-64" align="end" forceMount> {/* Increased width */}
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col space-y-1">
             <p className="text-sm font-medium leading-none">{currentUser.displayName || 'User'}</p>
             <p className="text-xs leading-none text-muted-foreground">
               {currentUser.email}
             </p>
-            <p className="text-xs leading-none text-muted-foreground capitalize pt-1">Role: {currentUser.role}</p>
+            {/* {organizationName && (
+              <p className="text-xs leading-none text-muted-foreground pt-1">
+                Org: {organizationName}
+              </p>
+            )} */}
+             {currentUser.currentOrganizationId && currentUser.currentOrganizationRole && (
+                <p className="text-xs leading-none text-muted-foreground capitalize pt-1">
+                    Role: {currentUser.currentOrganizationRole}
+                </p>
+            )}
+            {!currentUser.currentOrganizationId && (
+                 <p className="text-xs leading-none text-muted-foreground capitalize pt-1 text-orange-500">
+                    No active organization
+                </p>
+            )}
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
@@ -71,28 +102,40 @@ export function UserProfileDropdown() {
             <span>Profile</span>
           </Link>
         </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link href="/users">
-            <Users className="mr-2 h-4 w-4" />
-            <span>User Directory</span>
-          </Link>
-        </DropdownMenuItem>
-         {(currentUser.role === 'admin' || currentUser.role === 'editor') && (
-          <DropdownMenuItem asChild>
-            <Link href="/invite">
-              <UserPlus className="mr-2 h-4 w-4" />
-              <span>Invite Users</span>
-            </Link>
-          </DropdownMenuItem>
+        
+        {currentUser.currentOrganizationId && (
+          <>
+            <DropdownMenuItem asChild>
+              <Link href="/users"> {/* Should be /organization/users or similar context */}
+                <Users className="mr-2 h-4 w-4" />
+                <span>Organization Members</span>
+              </Link>
+            </DropdownMenuItem>
+            {(currentUser.currentOrganizationRole === 'admin' || currentUser.currentOrganizationRole === 'editor') && (
+              <DropdownMenuItem asChild>
+                <Link href="/invite"> {/* Should be /organization/invite */}
+                  <UserPlus className="mr-2 h-4 w-4" />
+                  <span>Invite Users</span>
+                </Link>
+              </DropdownMenuItem>
+            )}
+            {currentUser.currentOrganizationRole === 'admin' && (
+              <DropdownMenuItem asChild>
+                <Link href={`/organization/${currentUser.currentOrganizationId}/settings`}>
+                  <Settings className="mr-2 h-4 w-4" />
+                  <span>Organization Settings</span>
+                </Link>
+              </DropdownMenuItem>
+            )}
+          </>
         )}
-        {/* Potentially an admin settings link */}
-        {currentUser.role === 'admin' && (
-           <DropdownMenuItem asChild>
-             <Link href="/admin/settings"> {/* Example path */}
-               <Settings className="mr-2 h-4 w-4" />
-               <span>Admin Settings</span>
-             </Link>
-           </DropdownMenuItem>
+        {!currentUser.currentOrganizationId && (
+            <DropdownMenuItem asChild>
+                <Link href="/create-organization">
+                    <Building className="mr-2 h-4 w-4" />
+                    <span>Create Organization</span>
+                </Link>
+            </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={logout}>

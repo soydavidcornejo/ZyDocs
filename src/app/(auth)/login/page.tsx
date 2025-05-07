@@ -9,25 +9,35 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { BookOpenText, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
-  const { currentUser, loading } = useAuth();
+  const { currentUser, loading, requiresOrganizationCreation } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectPath = searchParams.get('redirect') || '/profile';
+  const redirectPath = searchParams.get('redirect');
 
 
   useEffect(() => {
     if (!loading && currentUser) {
-      router.push(redirectPath); 
+      if (requiresOrganizationCreation) {
+        router.push('/create-organization');
+      } else if (redirectPath && redirectPath !== '/create-organization') {
+        router.push(redirectPath);
+      } else if (currentUser.currentOrganizationId) {
+         router.push('/docs'); // Default to docs if org exists
+      } else {
+        // This case should ideally be handled by requiresOrganizationCreation
+        // but as a fallback, go to create org if no specific redirect and no org.
+        router.push('/create-organization');
+      }
     }
-  }, [currentUser, loading, router, redirectPath]);
+  }, [currentUser, loading, router, redirectPath, requiresOrganizationCreation]);
 
   if (loading) {
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /> <span className="ml-2">Loading...</span></div>;
   }
   
+  // If already logged in and redirection is in progress via useEffect
   if (currentUser) {
-     // Should have been redirected, but as a fallback:
-    return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Already logged in. Redirecting...</div>;
+    return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Checking your details, redirecting soon...</div>;
   }
 
   return (

@@ -13,114 +13,176 @@ import {
 } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase/config';
 import { doc, getDoc, setDoc, serverTimestamp, updateDoc, type Timestamp } from 'firebase/firestore';
-import type { UserProfile, UserRole } from '@/types/user';
+import type { UserProfile, UserRole, AuthenticatedUser } from '@/types/user';
+import type { OrganizationMember } from '@/types/organization';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2 } from 'lucide-react';
+import { getUserOrganizationMemberships } from '@/lib/firebase/firestore/organizationMembers';
+import { updateUserActiveOrganization as updateUserActiveOrgInFirestore } from '@/lib/firebase/firestore/users';
+import { useRouter } from 'next/navigation';
+
 
 interface AuthContextType {
-  currentUser: UserProfile | null;
+  currentUser: AuthenticatedUser | null;
   firebaseUser: FirebaseUser | null;
   loading: boolean;
+  requiresOrganizationCreation: boolean;
+  setRequiresOrganizationCreation: (value: boolean) => void;
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   updateUserDisplayNameAndPhoto: (displayName: string, photoURL?: string | null) => Promise<void>;
+  refreshUserProfile: () => Promise<void>; // To refresh after org creation etc.
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(null);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [requiresOrganizationCreation, setRequiresOrganizationCreation] = useState(false);
   const { toast } = useToast();
+  const router = useRouter();
 
-  const syncUserProfile = useCallback(async (fbUser: FirebaseUser): Promise<UserProfile> => {
+  const syncUserProfile = useCallback(async (fbUser: FirebaseUser): Promise<AuthenticatedUser | null> => {
     const userRef = doc(db, 'users', fbUser.uid);
     let userDoc = await getDoc(userRef);
-    let userRole: UserRole = 'reader'; // Default role
+    let userRoleFromClaims: UserRole = 'reader'; // Default role from claims
 
     try {
-      const tokenResult = await fbUser.getIdTokenResult(true); // Force refresh token
-      userRole = (tokenResult.claims.role as UserRole) || 'reader';
+      const tokenResult = await fbUser.getIdTokenResult(true);
+      userRoleFromClaims = (tokenResult.claims.role as UserRole) || 'reader';
     } catch (error) {
-      console.error("Error fetching token result for role:", error);
-      // Keep default role or try to get from existing doc
+      console.warn("Warning: Error fetching token result for role. User might not have custom claims set yet or there's a token issue.", error);
     }
     
-    const userData: UserProfile = {
-      uid: fbUser.uid,
-      email: fbUser.email,
-      displayName: fbUser.displayName,
-      photoURL: fbUser.photoURL,
-      role: userRole, // Role from claims
-      updatedAt: serverTimestamp() as Timestamp,
-    };
+    let userProfileData: UserProfile;
 
     if (!userDoc.exists()) {
-      userData.createdAt = serverTimestamp() as Timestamp;
-      await setDoc(userRef, userData);
-      // Re-fetch after creation if serverTimestamp needs to be resolved client-side (usually not necessary for display)
-      // userDoc = await getDoc(userRef); 
+      userProfileData = {
+        uid: fbUser.uid,
+        email: fbUser.email,
+        displayName: fbUser.displayName,
+        photoURL: fbUser.photoURL,
+        role: userRoleFromClaims, 
+        activeOrganizationId: null,
+        createdAt: serverTimestamp() as Timestamp,
+        updatedAt: serverTimestamp() as Timestamp,
+      };
+      await setDoc(userRef, userProfileData);
+      userDoc = await getDoc(userRef); // Re-fetch to get server-generated timestamps
+      userProfileData = userDoc.data() as UserProfile;
     } else {
-      // Only update if there are changes from Firebase Auth or if role needs syncing
-      const existingData = userDoc.data() as UserProfile;
-      const updates: Partial<UserProfile> = {};
-      if (existingData.displayName !== fbUser.displayName) updates.displayName = fbUser.displayName;
-      if (existingData.photoURL !== fbUser.photoURL) updates.photoURL = fbUser.photoURL;
-      if (existingData.email !== fbUser.email) updates.email = fbUser.email; // Should rarely change but good to sync
-      if (existingData.role !== userRole) updates.role = userRole; // Sync role from claims
-
-      if (Object.keys(updates).length > 0) {
-        await updateDoc(userRef, { ...updates, updatedAt: serverTimestamp() });
+      userProfileData = userDoc.data() as UserProfile;
+      // Ensure role from claims is synced if it's different or not set
+      if (userProfileData.role !== userRoleFromClaims) {
+        await updateDoc(userRef, { role: userRoleFromClaims, updatedAt: serverTimestamp() });
+        userProfileData.role = userRoleFromClaims;
       }
     }
-    // For currentUser state, use the fresh data including potentially resolved timestamps if needed.
-    // For simplicity, we return userData which might have serverTimestamp() placeholder.
-    // The onSnapshot listener in pages/components should handle real-time display.
     
-    const finalDoc = await getDoc(userRef); // Get the potentially updated/created doc
-    return finalDoc.data() as UserProfile;
+    // Fetch organization memberships
+    const memberships = await getUserOrganizationMemberships(fbUser.uid);
+    let activeOrgId = userProfileData.activeOrganizationId;
+    let currentOrgRole: UserRole | null = null;
+
+    if (memberships.length > 0) {
+      if (!activeOrgId || !memberships.find(m => m.organizationId === activeOrgId)) {
+        // If no active org set, or active org is not in memberships, pick the first one.
+        // In a multi-org setup, you'd have a mechanism to select/store preferred active org.
+        activeOrgId = memberships[0].organizationId;
+        await updateUserActiveOrgInFirestore(fbUser.uid, activeOrgId);
+        userProfileData.activeOrganizationId = activeOrgId;
+      }
+      const activeMembership = memberships.find(m => m.organizationId === activeOrgId);
+      currentOrgRole = activeMembership ? activeMembership.role : null;
+    } else {
+      // No memberships, this user might need to create an organization
+      setRequiresOrganizationCreation(true);
+      activeOrgId = null; // ensure no active org is set
+      if (userProfileData.activeOrganizationId) { // clear it from DB if they had one but no longer a member
+        await updateUserActiveOrgInFirestore(fbUser.uid, null);
+        userProfileData.activeOrganizationId = null;
+      }
+    }
+    
+    // Ensure createdAt and updatedAt are Date objects for client-side use
+    const resolvedUserProfile: UserProfile = {
+        ...userProfileData,
+        createdAt: userProfileData.createdAt && (userProfileData.createdAt as Timestamp).toDate ? (userProfileData.createdAt as Timestamp).toDate() : new Date(),
+        updatedAt: userProfileData.updatedAt && (userProfileData.updatedAt as Timestamp).toDate ? (userProfileData.updatedAt as Timestamp).toDate() : new Date(),
+    };
+
+    return {
+      ...resolvedUserProfile,
+      currentOrganizationId: activeOrgId,
+      currentOrganizationRole: currentOrgRole,
+    };
 
   }, []);
 
+
+  const refreshUserProfile = useCallback(async () => {
+    if (auth.currentUser) {
+      setLoading(true);
+      try {
+        const updatedProfile = await syncUserProfile(auth.currentUser);
+        setCurrentUser(updatedProfile);
+        if (updatedProfile && !updatedProfile.currentOrganizationId) {
+             setRequiresOrganizationCreation(true);
+        } else {
+            setRequiresOrganizationCreation(false);
+        }
+      } catch (error) {
+        console.error("Error refreshing user profile:", error);
+        toast({ title: "Error", description: "Could not refresh user profile.", variant: "destructive" });
+      } finally {
+        setLoading(false);
+      }
+    }
+  }, [syncUserProfile, toast]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (user) {
+        setLoading(true);
         try {
           const userProfile = await syncUserProfile(user);
           setCurrentUser(userProfile);
+          if (userProfile && !userProfile.currentOrganizationId) {
+            setRequiresOrganizationCreation(true);
+            // router.push('/create-organization'); // Moved to component logic
+          } else {
+            setRequiresOrganizationCreation(false);
+          }
         } catch (error) {
-            console.error("Error syncing user profile:", error);
-            // Fallback to basic user object if Firestore sync fails
-            setCurrentUser({
-                uid: user.uid,
-                email: user.email,
-                displayName: user.displayName,
-                photoURL: user.photoURL,
-                role: 'reader', // Default role on error
-            });
+            console.error("Error syncing user profile on auth state change:", error);
+            setCurrentUser(null); // Fallback on error
+        } finally {
+            setLoading(false);
         }
       } else {
         setCurrentUser(null);
+        setRequiresOrganizationCreation(false);
+        setLoading(false);
       }
-      setLoading(false);
     });
     return () => unsubscribe();
-  }, [syncUserProfile]);
+  }, [syncUserProfile, router]);
 
   const signInWithGoogle = useCallback(async () => {
     setLoading(true);
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-      // onAuthStateChanged will handle setting currentUser after syncUserProfile
+      // onAuthStateChanged will handle setting currentUser
       toast({ title: 'Login Successful', description: 'Welcome!' });
     } catch (error) {
       console.error("Error signing in with Google:", error);
       toast({ title: 'Login Failed', description: 'Could not sign in with Google. Please try again.', variant: 'destructive' });
-      setLoading(false);
+    } finally {
+        // setLoading(false); // onAuthStateChanged will handle final loading state
     }
   }, [toast]);
 
@@ -128,20 +190,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     try {
       await signOut(auth);
-      // onAuthStateChanged will set currentUser to null
+      setCurrentUser(null);
+      setFirebaseUser(null);
+      setRequiresOrganizationCreation(false);
       toast({ title: 'Logged Out', description: 'You have been successfully logged out.' });
+      router.push('/login');
     } catch (error) {
       console.error("Error signing out:", error);
       toast({ title: 'Logout Failed', description: 'Could not sign out. Please try again.', variant: 'destructive' });
+    } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, router]);
 
   const updateUserDisplayNameAndPhoto = useCallback(async (displayName: string, photoURL?: string | null) => {
     if (!auth.currentUser) {
       toast({ title: 'Error', description: 'No user logged in.', variant: 'destructive' });
       throw new Error('No user logged in');
     }
+    setLoading(true);
     try {
       const updatePayload: { displayName?: string; photoURL?: string | null } = { displayName };
       if (photoURL !== undefined) {
@@ -149,7 +216,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       await updateFirebaseProfile(auth.currentUser, updatePayload);
       
-      // Update Firestore document
       const userRef = doc(db, 'users', auth.currentUser.uid);
       const firestoreUpdatePayload: Partial<UserProfile> = {
         displayName,
@@ -159,36 +225,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         firestoreUpdatePayload.photoURL = photoURL;
       }
       await updateDoc(userRef, firestoreUpdatePayload);
-
-      // Update local state immediately for better UX
-      setFirebaseUser(auth.currentUser); // Re-fetch or update firebaseUser state
-      setCurrentUser(prev => prev ? { ...prev, ...firestoreUpdatePayload, updatedAt: new Date() } : null); // Use new Date() for optimistic UI
+      
+      // Optimistically update local state and then refresh from source
+      // This assumes firebaseUser is up-to-date from updateFirebaseProfile.
+      // We must call syncUserProfile to get the combined profile with org data.
+      await refreshUserProfile();
       
       toast({ title: 'Profile Updated', description: 'Your profile has been updated.' });
     } catch (error) {
       console.error("Error updating profile:", error);
       toast({ title: 'Update Failed', description: 'Could not update profile.', variant: 'destructive' });
       throw error;
+    } finally {
+        setLoading(false);
     }
-  }, [toast]);
+  }, [toast, refreshUserProfile]);
   
-  // Renamed from updateUserDisplayName to be more generic
   const contextValue = {
     currentUser,
     firebaseUser,
     loading,
+    requiresOrganizationCreation,
+    setRequiresOrganizationCreation,
     signInWithGoogle,
     logout,
-    updateUserDisplayNameAndPhoto, // Updated name
+    updateUserDisplayNameAndPhoto,
+    refreshUserProfile,
   };
-
 
   return (
     <AuthContext.Provider value={contextValue}>
-      {loading && !currentUser ? ( // Show loader only on initial load and if no user yet
-         <div className="flex h-screen items-center justify-center">
+      {loading && !currentUser ? (
+         <div className="flex h-screen items-center justify-center bg-background">
            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-           <span className="ml-2 text-lg">Initializing ZyDocs...</span>
+           <span className="ml-2 text-lg text-foreground">Initializing ZyDocs...</span>
          </div>
       ) : children}
     </AuthContext.Provider>

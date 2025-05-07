@@ -1,17 +1,12 @@
 import type {Metadata} from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Inter } from 'next/font/google'; // Using Inter as a common, clean sans-serif font
 import './globals.css';
 import { Toaster } from "@/components/ui/toaster";
 import { Header } from '@/components/layout/Header';
 import { AuthProvider } from '@/contexts/AuthContext';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
+const inter = Inter({
+  variable: '--font-inter', // Example of setting CSS variable for font
   subsets: ['latin'],
 });
 
@@ -27,11 +22,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body className={`${inter.variable} antialiased bg-background text-foreground`}>
         <AuthProvider>
-          <Header />
-          <main className="pt-16">{children}</main>
-          <Toaster />
+          <div className="flex flex-col min-h-screen">
+            <Header />
+            <main className="flex-grow pt-16">{/* Ensure content starts below fixed header */}
+              {children}
+            </main>
+            <Toaster />
+          </div>
         </AuthProvider>
       </body>
     </html>

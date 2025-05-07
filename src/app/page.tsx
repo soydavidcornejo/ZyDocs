@@ -1,11 +1,50 @@
 // src/app/page.tsx
+'use client';
+
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { ArrowRight, BookOpenText, Edit3, UploadCloud } from 'lucide-react';
+import { ArrowRight, BookOpenText, Edit3, UploadCloud, Loader2 } from 'lucide-react';
 import Image from 'next/image';
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 
 export default function HomePage() {
+  const { currentUser, loading, requiresOrganizationCreation } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && currentUser) {
+      if (requiresOrganizationCreation) {
+        router.push('/create-organization');
+      } else if (currentUser.currentOrganizationId) {
+        router.push('/docs'); // Or /docs/activeOrgId if preferred
+      }
+      // If no org and not requiring creation (edge case), they stay on home or go to profile.
+    }
+  }, [currentUser, loading, requiresOrganizationCreation, router]);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-4rem)] bg-gradient-to-br from-background to-secondary/30 py-12 px-4">
+        <Loader2 className="h-12 w-12 animate-spin text-primary" />
+        <p className="mt-4 text-lg text-muted-foreground">Loading ZyDocs...</p>
+      </div>
+    );
+  }
+  
+  // If user is logged in and being redirected by useEffect
+  if (currentUser && (requiresOrganizationCreation || currentUser.currentOrganizationId)) {
+     return (
+      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-4rem)] bg-gradient-to-br from-background to-secondary/30 py-12 px-4">
+        <Loader2 className="h-12 w-12 animate-spin text-primary" />
+        <p className="mt-4 text-lg text-muted-foreground">Redirecting to your workspace...</p>
+      </div>
+    );
+  }
+
+
   return (
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-4rem)] bg-gradient-to-br from-background to-secondary/30 py-12 px-4">
       <div className="text-center max-w-3xl mx-auto">
@@ -18,7 +57,7 @@ export default function HomePage() {
         </p>
         <div className="mt-10 flex items-center justify-center gap-x-6">
           <Button asChild size="lg" className="shadow-lg hover:shadow-primary/50 transition-shadow">
-            <Link href="/docs/org1">
+            <Link href={currentUser ? (requiresOrganizationCreation ? "/create-organization" : "/docs") : "/login"}>
               Get Started <ArrowRight className="ml-2 h-5 w-5" />
             </Link>
           </Button>
