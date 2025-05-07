@@ -264,34 +264,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const leaveOrganization = useCallback(async (organizationId: string) => {
     if (!currentUser || !firebaseUser) {
       toast({ title: "Error", description: "User not authenticated.", variant: "destructive" });
-      throw new Error("User not authenticated.");
+      throw new Error("User not authenticated."); // This error will be caught by the caller
     }
     
     const membership = currentUser.organizationMemberships?.find(mem => mem.organizationId === organizationId && mem.status === 'active');
     if (!membership || !membership.id) {
       toast({ title: "Error", description: "Membership not found or already inactive.", variant: "destructive" });
-      throw new Error("Membership not found or already inactive.");
+      throw new Error("Membership not found or already inactive."); // This error will be caught by the caller
     }
 
-    // Add check: User cannot leave if they are the owner AND the only admin.
-    // This requires fetching organization details to check ownerUid and fetching all admin members for that org.
-    // For simplicity now, this check is partially done on the UI. A robust check should be here or backend.
+    setLoading(true); // Set global loading state *before* async operations
 
-    setLoading(true);
     try {
-      await updateOrganizationMemberStatus(membership.id, 'inactive'); // Or 'left'
+      await updateOrganizationMemberStatus(membership.id, 'inactive');
       
-      // If the left organization was the active one, clear it
       if (currentUser.currentOrganizationId === organizationId) {
         await updateUserActiveOrgInFirestore(firebaseUser.uid, null);
       }
-      await refreshUserProfile(); // This will update currentUser and requiresOrganizationCreation
-      // No explicit redirect here, AppLayout or page will handle it based on new currentUser state
+      
+      await refreshUserProfile(); // This is critical and handles its own loading internally for the refresh part
+      // Success toast is handled by the caller (organizations/page.tsx)
     } catch (error) {
-      setLoading(false);
-      console.error("Error leaving organization:", error);
-      toast({ title: "Error", description: "Could not leave organization.", variant: "destructive" });
-      throw error;
+      // Error is re-thrown to be handled by the caller.
+      console.error("Error during leaveOrganization process:", error);
+      // The caller (organizations/page.tsx) should handle its own UI updates (e.g. spinner) and toasts for errors.
+      throw error; 
+    } finally {
+        setLoading(false); // Reset global loading state for the overall leave operation
     }
   }, [currentUser, firebaseUser, refreshUserProfile, toast]);
   
