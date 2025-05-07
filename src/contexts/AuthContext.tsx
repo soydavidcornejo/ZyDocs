@@ -31,7 +31,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   updateUserDisplayNameAndPhoto: (displayName: string, photoURL?: string | null) => Promise<void>;
   refreshUserProfile: () => Promise<void>;
-  selectActiveOrganization: (organizationId: string) => Promise<void>;
+  selectActiveOrganization: (organizationId: string, targetPath?: string) => Promise<void>;
   leaveOrganization: (organizationId: string) => Promise<void>;
 }
 
@@ -167,31 +167,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, [syncUserProfile]);
 
-  const selectActiveOrganization = useCallback(async (organizationId: string) => {
+  const selectActiveOrganization = useCallback(async (organizationId: string, targetPath?: string) => {
     if (!currentUser || !firebaseUser) {
         toast({ title: "Error", description: "User not authenticated.", variant: "destructive" });
         router.push('/login');
         return;
     }
-    // Check if the organizationId is part of the user's current active memberships
+    
     const isValidSelection = currentUser.organizationMemberships?.some(mem => mem.organizationId === organizationId && mem.status === 'active');
 
     if (!isValidSelection) {
         toast({ title: "Selection Error", description: "Cannot select this organization. It may be inactive or you are no longer a member.", variant: "destructive" });
-        await refreshUserProfile(); // Refresh to get latest state
-        router.push('/organizations'); // Redirect to organization selection
+        await refreshUserProfile(); 
+        router.push('/organizations'); 
         return;
     }
 
-    setLoading(true);
+    // Set loading to true only if we are actually performing the selection and navigation.
+    // If the organization is already active and we're just navigating, no need for global loading.
+    let didPerformSelection = false;
+    if (currentUser.currentOrganizationId !== organizationId) {
+        setLoading(true);
+        didPerformSelection = true;
+    }
+
     try {
-        await updateUserActiveOrgInFirestore(firebaseUser.uid, organizationId);
-        await refreshUserProfile(); 
-        router.push('/organizations'); // Changed from /docs
+        if (currentUser.currentOrganizationId !== organizationId) {
+            await updateUserActiveOrgInFirestore(firebaseUser.uid, organizationId);
+            await refreshUserProfile(); 
+        }
+        // Navigation logic
+        if (targetPath) {
+            router.push(targetPath);
+        } else {
+            router.push('/organizations');
+        }
     } catch (error) {
         console.error("Error selecting active organization:", error);
         toast({ title: "Error", description: "Could not switch organization.", variant: "destructive" });
-        setLoading(false); 
+    } finally {
+        if (didPerformSelection) {
+          setLoading(false); 
+        }
     }
   }, [currentUser, firebaseUser, refreshUserProfile, router, toast]);
 

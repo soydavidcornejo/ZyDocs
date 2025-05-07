@@ -2,8 +2,8 @@
 'use client';
 
 import type React from 'react';
-import { useEffect, useState, useCallback, Suspense } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation'; // useRouter instead of usePathname
+import { useEffect, useState, useCallback, Suspense, useMemo } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -21,7 +21,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DocumentTree } from "@/components/document/DocumentTree";
 import WysiwygEditor from "@/components/editor/WysiwygEditor";
-import { createDocumentInFirestore, getDocumentsForOrganization } from '@/lib/firebase/firestore/documents';
+import { CreatePageModal } from '@/components/document/CreatePageModal';
+import { createDocumentInFirestore, getDocumentsForOrganization, updateDocumentInFirestore } from '@/lib/firebase/firestore/documents';
 import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations';
 import type { DocumentNode } from '@/types/document';
 import type { Organization } from '@/types/organization';
@@ -31,6 +32,8 @@ import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+const WIKI_TREE_STATE_KEY_PREFIX = 'zyDocsWikiTreeState_';
+
 // Helper component for sidebar content to access sidebar context
 const WikiSidebarContent = ({
   organizationId,
@@ -38,33 +41,21 @@ const WikiSidebarContent = ({
   currentDocumentId,
   onSelectDocument,
   organizationName,
+  expandedItems,
+  setExpandedItems,
+  onPageCreated,
 }: {
   organizationId: string;
   documents: DocumentNode[];
   currentDocumentId?: string;
   onSelectDocument: (id: string) => void;
   organizationName: string;
+  expandedItems: string[];
+  setExpandedItems: (items: string[]) => void;
+  onPageCreated: () => void;
 }) => {
   const { open, setOpen } = useSidebar();
-  const router = useRouter();
-  const { toast } = useToast(); // Added toast for notifications
-
-  const handleCreateNewPage = async () => {
-    const pageName = prompt('Enter the name for the new page:');
-    if (pageName && pageName.trim() !== '') {
-      try {
-        await createDocumentInFirestore(pageName.trim(), null, organizationId, 'page', 0, `# ${pageName.trim()}\n\nStart writing here...`);
-        toast({ title: 'Page Created', description: `Page "${pageName.trim()}" created successfully.` });
-        // Navigate to the wiki root, which will trigger a re-fetch of documents
-        // including the new page, in the parent component's useEffect.
-        router.push(`/organization/${organizationId}/wiki`); 
-      } catch (error) {
-        toast({ title: 'Error', description: 'Failed to create page.', variant: 'destructive' });
-        console.error("Error creating page:", error);
-      }
-    }
-  };
-
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   return (
     <>
@@ -82,6 +73,8 @@ const WikiSidebarContent = ({
               currentDocumentId={currentDocumentId}
               onSelectDocument={onSelectDocument}
               basePath={`/organization/${organizationId}/wiki`}
+              expandedItems={expandedItems}
+              setExpandedItems={setExpandedItems}
             />
           ) : (
             <p className="text-sm text-muted-foreground p-4 text-center">No pages yet. Create one!</p>
@@ -89,17 +82,24 @@ const WikiSidebarContent = ({
         </ScrollArea>
       </SidebarContent>
       <SidebarFooter className="p-3 border-t border-sidebar-border group-data-[collapsible=icon]:hidden">
-        <Button variant="outline" size="sm" className="w-full" onClick={handleCreateNewPage}>
-          <PlusCircle className="mr-2 h-4 w-4" /> New Page
+        <Button variant="outline" size="sm" className="w-full" onClick={() => setIsCreateModalOpen(true)}>
+          <PlusCircle className="mr-2 h-4 w-4" /> Create Page
         </Button>
       </SidebarFooter>
+      <CreatePageModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        organizationId={organizationId}
+        allDocuments={documents} // Pass flat list of documents for parent selection
+        onPageCreated={onPageCreated}
+      />
     </>
   );
 };
 
 
 function OrganizationWikiPageComponent({ params }: { params: { organizationId: string; pageId?: string[] } }) {
-  const { currentUser, loading: authLoading } = useAuth();
+  const { currentUser, loading: authLoading, selectActiveOrganization } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
   
@@ -108,14 +108,29 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   const searchParams = useSearchParams();
   const editModeQuery = searchParams.get('edit') === 'true';
 
-
   const [currentDocument, setCurrentDocument] = useState<DocumentNode | null>(null);
-  const [documents, setDocuments] = useState<DocumentNode[]>([]);
-  const [documentTree, setDocumentTree] = useState<DocumentNode[]>([]);
+  const [documents, setDocuments] = useState<DocumentNode[]>([]); // Flat list of all documents
+  const [documentTree, setDocumentTree] = useState<DocumentNode[]>([]); // Hierarchical tree
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [isEditing, setIsEditing] = useState(editModeQuery);
   const [editedContent, setEditedContent] = useState('');
   const [organization, setOrganization] = useState<Organization | null>(null);
+
+  // State for persisted expanded items in DocumentTree
+  const wikiTreeStorageKey = useMemo(() => `${WIKI_TREE_STATE_KEY_PREFIX}${organizationId}`, [organizationId]);
+  const [expandedItems, setExpandedItems] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      const savedState = localStorage.getItem(wikiTreeStorageKey);
+      return savedState ? JSON.parse(savedState) : [];
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(wikiTreeStorageKey, JSON.stringify(expandedItems));
+    }
+  }, [expandedItems, wikiTreeStorageKey]);
 
   useEffect(() => {
     setIsEditing(editModeQuery);
@@ -130,29 +145,38 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
         router.push('/organizations');
       } else {
         setOrganization(org);
+         // Ensure this organization is active
+        if (currentUser && currentUser.currentOrganizationId !== organizationId) {
+          await selectActiveOrganization(organizationId, `/organization/${organizationId}/wiki${currentPageIdFromSlug ? `/${currentPageIdFromSlug}` : ''}`);
+        }
       }
     } catch (error) {
       console.error("Error fetching organization details:", error);
       toast({ title: 'Error', description: 'Could not load organization details.', variant: 'destructive' });
     }
-  }, [organizationId, router, toast]);
+  }, [organizationId, router, toast, currentUser, selectActiveOrganization, currentPageIdFromSlug]);
 
 
-  const fetchDocuments = useCallback(async () => {
+  const fetchDocuments = useCallback(async (selectPageId?: string) => {
     if (!organizationId || !currentUser) return;
     setIsLoadingContent(true);
     try {
       const fetchedDocs = await getDocumentsForOrganization(organizationId);
-      setDocuments(fetchedDocs);
+      setDocuments(fetchedDocs); // Store flat list
       const tree = buildDocumentTree(fetchedDocs);
       setDocumentTree(tree);
 
-      if (currentPageIdFromSlug) {
-        const doc = findDocumentInList(fetchedDocs, currentPageIdFromSlug);
+      const pageIdToSelect = selectPageId || currentPageIdFromSlug;
+
+      if (pageIdToSelect) {
+        const doc = findDocumentInList(fetchedDocs, pageIdToSelect);
         setCurrentDocument(doc);
         setEditedContent(doc?.content || '');
+        if (doc && doc.parentId && !expandedItems.includes(`item-${doc.parentId}`)) {
+            setExpandedItems(prev => [...prev, `item-${doc.parentId}`]);
+        }
+
       } else {
-        // If on the root of the wiki (no specific page selected), clear current document.
         setCurrentDocument(null);
         setEditedContent('');
       }
@@ -162,12 +186,12 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
     } finally {
       setIsLoadingContent(false);
     }
-  }, [organizationId, currentUser, currentPageIdFromSlug, toast]);
+  }, [organizationId, currentUser, currentPageIdFromSlug, toast, expandedItems]);
 
   useEffect(() => {
     if (!authLoading && currentUser) {
       fetchOrganizationDetails();
-      fetchDocuments(); // This will also handle setting currentDocument based on currentPageIdFromSlug
+      fetchDocuments();
     } else if (!authLoading && !currentUser) {
       router.push(`/login?redirect=/organization/${organizationId}/wiki${currentPageIdFromSlug ? `/${currentPageIdFromSlug}` : ''}`);
     }
@@ -175,28 +199,29 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   
 
   const handleSelectDocument = (id: string) => {
-    // When a document is selected from the tree, navigate to its page.
-    // This will trigger the useEffect above to fetch/set the document.
-    // Also, exit edit mode if active.
     router.push(`/organization/${organizationId}/wiki/${id}`);
+  };
+  
+  const handlePageCreated = async (newPageId?: string) => {
+    await fetchDocuments(newPageId); // Re-fetch and optionally select the new page
+    if (newPageId) {
+        router.push(`/organization/${organizationId}/wiki/${newPageId}`);
+    }
   };
 
   const handleSaveContent = async () => {
     if (!currentDocument) return;
     setIsLoadingContent(true);
     try {
-      // This would be an update operation
-      // await updateDocumentInFirestore(currentDocument.id, { content: editedContent });
-      // For now, this part is conceptual as updateDocumentInFirestore is not fully implemented
-      // Simulating save:
-      const updatedDoc = { ...currentDocument, content: editedContent };
+      await updateDocumentInFirestore(currentDocument.id, { content: editedContent });
+      const updatedDoc = { ...currentDocument, content: editedContent, updatedAt: new Date() };
       setCurrentDocument(updatedDoc);
-      // Update in local 'documents' list as well for tree refresh
       setDocuments(docs => docs.map(d => d.id === updatedDoc.id ? updatedDoc : d));
+      const newTree = buildDocumentTree(documents.map(d => d.id === updatedDoc.id ? updatedDoc : d));
+      setDocumentTree(newTree);
       
-      toast({ title: 'Saved (Conceptual)', description: 'Content changes conceptually saved.' });
-      // setIsEditing(false); // This will be handled by router push and useEffect on editModeQuery
-      router.push(`/organization/${organizationId}/wiki/${currentDocument.id}`); // Remove ?edit=true
+      toast({ title: 'Saved', description: 'Content changes saved successfully.' });
+      router.push(`/organization/${organizationId}/wiki/${currentDocument.id}`); 
     } catch (error) {
       toast({ title: 'Error', description: 'Failed to save content.', variant: 'destructive' });
     } finally {
@@ -211,15 +236,12 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
     }
     
     const targetPath = `/organization/${organizationId}/wiki/${currentDocument?.id || ''}`;
-    if (isEditing) { // Leaving edit mode
-        // Optionally, reset editedContent if changes are not saved, or prompt user.
-        // For now, just navigate away from edit mode.
-        if (currentDocument) setEditedContent(currentDocument.content || ''); // Reset to original
+    if (isEditing) { 
+        if (currentDocument) setEditedContent(currentDocument.content || ''); 
         router.push(targetPath);
-    } else { // Entering edit mode
+    } else { 
         router.push(`${targetPath}?edit=true`);
     }
-    // setIsEditing state will be updated by useEffect watching editModeQuery
   };
 
   if (authLoading || (!currentUser && !authLoading) || !organization) {
@@ -231,7 +253,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
 
   return (
     <SidebarProvider defaultOpen>
-      <div className="flex h-[calc(100vh-4rem)] bg-background"> {/* Ensure full height below header */}
+      <div className="flex h-[calc(100vh-4rem)] bg-background">
         <Sidebar collapsible="icon" className="border-r">
           <WikiSidebarContent
             organizationId={organizationId}
@@ -239,6 +261,9 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
             currentDocumentId={currentPageIdFromSlug}
             onSelectDocument={handleSelectDocument}
             organizationName={organization.name || 'Organization'}
+            expandedItems={expandedItems}
+            setExpandedItems={setExpandedItems}
+            onPageCreated={handlePageCreated}
           />
         </Sidebar>
         <SidebarInset>
@@ -253,7 +278,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
                     <CardDescription>Welcome to the wiki for {organization.name}. Select a page from the sidebar or create a new one.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <p>Use the sidebar to navigate through existing pages or click the &quot;New Page&quot; button to start a new document.</p>
+                    <p>Use the sidebar to navigate through existing pages or click the &quot;Create Page&quot; button to start a new document.</p>
                      {canEdit && !currentDocument && (
                       <Button onClick={toggleEditMode} variant="outline" size="sm" className="mt-4" disabled={true}>
                           <Edit3 className="mr-2 h-4 w-4" /> Edit Page (Select a page first)
@@ -287,7 +312,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
 
                   {isEditing && canEdit ? (
                     <WysiwygEditor
-                      initialContent={editedContent} // Use editedContent which is set from currentDocument.content
+                      initialContent={editedContent} 
                       onContentChange={setEditedContent}
                     />
                   ) : (
@@ -328,7 +353,6 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
 
 export default function OrganizationWikiPageWrapper({ params }: { params: { organizationId: string; pageId?: string[] } }) {
   return (
-    // Suspense is important for useSearchParams
     <Suspense fallback={<div className="flex h-[calc(100vh-4rem)] w-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading Wiki UI...</div>}>
       <OrganizationWikiPageComponent params={params} />
     </Suspense>

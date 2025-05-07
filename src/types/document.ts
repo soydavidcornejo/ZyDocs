@@ -5,9 +5,9 @@ export interface DocumentNode {
   id: string; // Firestore document ID
   organizationId: string; // ID of the organization this document belongs to
   name: string;
-  type: 'organization' | 'space' | 'page'; // 'organization' type here might represent the root node for display
+  type: 'page'; // Only 'page' type. Pages can have children to act as containers.
   parentId?: string | null;
-  content?: string; // Content for 'page' type
+  content?: string; // Content for the page
   children?: DocumentNode[]; // This will be constructed client-side after fetching
   createdAt?: Timestamp | Date; 
   updatedAt?: Timestamp | Date; 

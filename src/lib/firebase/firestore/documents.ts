@@ -1,23 +1,21 @@
 // src/lib/firebase/firestore/documents.ts
 import { db } from '@/lib/firebase/config';
-import { collection, addDoc, serverTimestamp, Timestamp, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, Timestamp, getDocs, query, where, orderBy, doc, updateDoc as updateFirestoreDoc, getDoc as getFirestoreDoc } from 'firebase/firestore';
 import type { DocumentNode } from '@/types/document';
 
 /**
- * Creates a new document (page or space) in Firestore.
- * @param name - The name of the document.
- * @param parentId - The ID of the parent document node.
- * @param organizationId - The ID of the organization this document belongs to.
- * @param type - The type of document ('page' or 'space').
- * @param order - The order of this document among its siblings.
- * @param initialContent - Optional initial content for 'page' type.
+ * Creates a new page in Firestore.
+ * @param name - The name of the page.
+ * @param parentId - The ID of the parent page. Null if root page.
+ * @param organizationId - The ID of the organization this page belongs to.
+ * @param order - The order of this page among its siblings.
+ * @param initialContent - Optional initial content for the page.
  * @returns The newly created DocumentNode object with resolved timestamps.
  */
 export const createDocumentInFirestore = async (
   name: string,
   parentId: string | null,
   organizationId: string,
-  type: 'page' | 'space' = 'page',
   order: number = 0,
   initialContent: string = ''
 ): Promise<DocumentNode> => {
@@ -26,10 +24,9 @@ export const createDocumentInFirestore = async (
       name,
       parentId,
       organizationId,
-      type,
+      type: 'page', // All documents are now 'page' type
       order,
-      content: type === 'page' ? initialContent : undefined,
-      // Timestamps will be set by Firestore
+      content: initialContent,
     };
 
     const docRef = await addDoc(collection(db, 'documents'), {
@@ -38,17 +35,14 @@ export const createDocumentInFirestore = async (
       updatedAt: serverTimestamp(),
     });
 
-    // Firestore timestamps are not immediately available client-side after serverTimestamp()
-    // For immediate UI update, we can use current date or fetch the doc again (adds latency)
-    // Here, we'll return with estimated client-side dates for createdAt/updatedAt for immediate use
-    // The actual server timestamps will be in the database.
     const now = new Date();
     return {
       id: docRef.id,
       ...docData,
       createdAt: now,
       updatedAt: now,
-    } as DocumentNode; // Cast as DocumentNode, children will be undefined
+      type: 'page', // Explicitly set type for return object
+    } as DocumentNode;
 
   } catch (error) {
     console.error('Error creating document in Firestore:', error);
@@ -58,7 +52,7 @@ export const createDocumentInFirestore = async (
 
 
 /**
- * Fetches all documents for a given organization, ordered for tree building.
+ * Fetches all documents (pages) for a given organization, ordered for tree building.
  * @param organizationId The ID of the organization.
  * @returns A promise that resolves to an array of DocumentNode.
  */
@@ -67,7 +61,7 @@ export const getDocumentsForOrganization = async (organizationId: string): Promi
   const q = query(
     docsCollection,
     where("organizationId", "==", organizationId),
-    orderBy("parentId"), // Important for tree building logic that groups children
+    orderBy("parentId"), 
     orderBy("order", "asc"),
     orderBy("name", "asc")
   );
@@ -81,7 +75,7 @@ export const getDocumentsForOrganization = async (organizationId: string): Promi
       id: docData.id,
       organizationId: data.organizationId,
       name: data.name,
-      type: data.type,
+      type: 'page', // All documents are of type 'page'
       parentId: data.parentId || null,
       content: data.content,
       order: data.order,
@@ -89,4 +83,59 @@ export const getDocumentsForOrganization = async (organizationId: string): Promi
       updatedAt,
     } as DocumentNode;
   });
+};
+
+/**
+ * Updates an existing document in Firestore.
+ * @param documentId - The ID of the document to update.
+ * @param updates - An object containing the fields to update.
+ * @returns A promise that resolves when the update is complete.
+ */
+export const updateDocumentInFirestore = async (
+  documentId: string,
+  updates: Partial<Pick<DocumentNode, 'name' | 'content' | 'parentId' | 'order'>>
+): Promise<void> => {
+  try {
+    const docRef = doc(db, 'documents', documentId);
+    await updateFirestoreDoc(docRef, {
+      ...updates,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('Error updating document in Firestore:', error);
+    throw new Error('Failed to update document.');
+  }
+};
+
+/**
+ * Retrieves a single document by its ID.
+ * @param documentId The ID of the document to fetch.
+ * @returns A promise that resolves to the DocumentNode or null if not found.
+ */
+export const getDocumentById = async (documentId: string): Promise<DocumentNode | null> => {
+  try {
+    const docRef = doc(db, 'documents', documentId);
+    const docSnap = await getFirestoreDoc(docRef);
+
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      const createdAt = data.createdAt && (data.createdAt as Timestamp).toDate ? (data.createdAt as Timestamp).toDate() : undefined;
+      const updatedAt = data.updatedAt && (data.updatedAt as Timestamp).toDate ? (data.updatedAt as Timestamp).toDate() : undefined;
+      return {
+        id: docSnap.id,
+        organizationId: data.organizationId,
+        name: data.name,
+        type: 'page',
+        parentId: data.parentId || null,
+        content: data.content,
+        order: data.order,
+        createdAt,
+        updatedAt,
+      } as DocumentNode;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error fetching document by ID:', error);
+    throw new Error('Failed to fetch document.');
+  }
 };

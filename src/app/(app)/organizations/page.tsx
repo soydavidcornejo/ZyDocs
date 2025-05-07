@@ -8,7 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import { ListChecks, PlusCircle, Loader2, Building, Settings, LogOutIcon as LeaveIcon, ExternalLink, BookOpenText } from 'lucide-react';
+import { ListChecks, PlusCircle, Loader2, Building, Settings, LogOutIcon as LeaveIcon, BookOpenText } from 'lucide-react';
 import type { OrganizationMember } from '@/types/organization';
 import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations';
 import { useToast } from '@/hooks/use-toast';
@@ -16,7 +16,7 @@ import { Separator } from '@/components/ui/separator';
 
 interface OrganizationWithName extends OrganizationMember {
   organizationName?: string;
-  isOwner?: boolean; // Add this to determine if the current user is the owner
+  isOwner?: boolean; 
 }
 
 export default function OrganizationsPage() {
@@ -25,7 +25,7 @@ export default function OrganizationsPage() {
   const { toast } = useToast();
   const [organizations, setOrganizations] = useState<OrganizationWithName[]>([]);
   const [isLoadingOrganizations, setIsLoadingOrganizations] = useState(true);
-  const [isProcessing, setIsProcessing] = useState<string | null>(null); // Store ID of org being processed (selected or left)
+  const [isProcessing, setIsProcessing] = useState<string | null>(null); // Store ID of org being processed (navigated to or left)
 
   useEffect(() => {
     if (!authLoading) {
@@ -41,7 +41,7 @@ export default function OrganizationsPage() {
               return { 
                 ...mem, 
                 organizationName: orgDetails?.name || 'Unnamed Organization',
-                isOwner: orgDetails?.ownerUid === currentUser.uid // Check if current user is the owner
+                isOwner: orgDetails?.ownerUid === currentUser.uid 
               };
             })
         ).then(orgsWithNames => {
@@ -53,20 +53,28 @@ export default function OrganizationsPage() {
             setIsLoadingOrganizations(false);
         });
       } else {
-        // No active memberships, but user exists. They might need to create one.
-        // AppLayout or page logic should handle redirection to /create-organization if needed.
         setOrganizations([]);
         setIsLoadingOrganizations(false);
       }
     }
   }, [currentUser, authLoading, router, toast]);
 
-  const handleSelectOrganization = async (organizationId: string) => {
+  const handleNavigateToOrgSection = async (organizationId: string, sectionBasePath: string) => {
     setIsProcessing(organizationId);
-    await selectActiveOrganization(organizationId);
-    // selectActiveOrganization handles routing to /organizations (now).
-    // setIsProcessing(null) might not be reached if routing is too fast, but it's fine.
+    try {
+      // selectActiveOrganization will handle navigation if targetPath is provided.
+      // It also handles the case where the org is already active.
+      await selectActiveOrganization(organizationId, `${sectionBasePath}`);
+    } catch (error) {
+      // Error handling for selectActiveOrganization is within AuthContext, including toasts
+      // but we might want to stop processing indicator here if navigation doesn't happen
+      setIsProcessing(null);
+    }
+    // setIsProcessing(null) should ideally be handled after navigation is confirmed
+    // or if selectActiveOrganization completes without navigation (e.g. error)
+    // Since selectActiveOrganization now handles nav, this will be reset on page change or error.
   };
+
 
   const handleLeaveOrganization = async (organizationId: string, organizationName?: string) => {
     setIsProcessing(organizationId);
@@ -76,9 +84,6 @@ export default function OrganizationsPage() {
         title: 'Left Organization',
         description: `You have successfully left "${organizationName || 'the organization'}".`,
       });
-      // Refresh organizations list, refreshUserProfile is called within leaveOrganization
-      // The useEffect for currentUser will re-fetch/re-filter organizations.
-      // If no orgs remain, AuthContext/AppLayout will redirect to /create-organization
     } catch (error) {
       console.error('Error leaving organization:', error);
       toast({
@@ -101,7 +106,6 @@ export default function OrganizationsPage() {
   }
   
   if (!currentUser) {
-    // Fallback, should be redirected by useEffect
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Redirecting to login...</div>;
   }
 
@@ -141,28 +145,28 @@ export default function OrganizationsPage() {
                 </div>
               </CardHeader>
               <CardContent className="flex-grow">
-                 <Button variant="outline" className="w-full mb-2" asChild>
-                   <Link href={`/organization/${org.organizationId}/wiki`}>
-                    <BookOpenText className="mr-2 h-4 w-4" /> View Wiki
-                   </Link>
-                </Button>
+                 <Button 
+                    variant="outline" 
+                    className="w-full mb-2" 
+                    onClick={() => handleNavigateToOrgSection(org.organizationId, `/organization/${org.organizationId}/wiki`)}
+                    disabled={isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId}
+                  >
+                    {isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BookOpenText className="mr-2 h-4 w-4" />}
+                     View Wiki
+                   </Button>
               </CardContent>
               <CardFooter className="flex flex-col space-y-2 pt-4 border-t">
-                <Button
-                  onClick={() => handleSelectOrganization(org.organizationId)}
-                  disabled={isProcessing === org.organizationId || authLoading}
-                  className="w-full"
-                  variant={currentUser?.currentOrganizationId === org.organizationId ? "secondary" : "default"}
-                >
-                  {isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (currentUser?.currentOrganizationId !== org.organizationId ? <ExternalLink className="mr-2 h-4 w-4" /> : null)}
-                  {currentUser?.currentOrganizationId === org.organizationId ? 'Currently Active' : 'Set Active'}
-                </Button>
+                {/* Removed explicit "Set Active" button */}
                 <div className="flex w-full space-x-2">
                   {org.role === 'admin' && (
-                    <Button variant="outline" className="flex-1" asChild>
-                       <Link href={`/organization/${org.organizationId}/settings`}>
-                        <Settings className="mr-2 h-4 w-4" /> Settings
-                       </Link>
+                    <Button 
+                        variant="outline" 
+                        className="flex-1" 
+                        onClick={() => handleNavigateToOrgSection(org.organizationId, `/organization/${org.organizationId}/settings`)}
+                        disabled={isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId}
+                    >
+                        {isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId && !router.asPath.includes('settings') ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings className="mr-2 h-4 w-4" />}
+                        Settings
                     </Button>
                   )}
                   <AlertDialog>
