@@ -1,6 +1,6 @@
 // src/types/user.ts
 import type { Timestamp } from 'firebase/firestore';
-import type { OrganizationMember } from './organization';
+import type { OrganizationMember, Invitation } from './organization';
 
 export type UserRole = 'admin' | 'editor' | 'reader';
 
@@ -20,5 +20,6 @@ export interface AuthenticatedUser extends UserProfile {
   currentOrganizationId: string | null;
   currentOrganizationRole: UserRole | null; // Role within the currentOrganizationId
   organizationMemberships?: OrganizationMember[]; // List of all organizations the user is a member of
+  pendingInvitations?: Invitation[]; // List of pending invitations for the user
   // globalRoleFromClaims?: UserRole; // If we need to differentiate global claim role from org role
 }

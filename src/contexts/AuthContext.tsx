@@ -14,11 +14,12 @@ import {
 import { auth, db } from '@/lib/firebase/config';
 import { doc, getDoc, setDoc, serverTimestamp, updateDoc, type Timestamp } from 'firebase/firestore';
 import type { UserProfile, UserRole, AuthenticatedUser } from '@/types/user';
-import type { OrganizationMember } from '@/types/organization';
+import type { OrganizationMember, Invitation } from '@/types/organization';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2 } from 'lucide-react';
-import { getUserOrganizationMemberships, updateOrganizationMemberStatus } from '@/lib/firebase/firestore/organizationMembers';
+import { getUserOrganizationMemberships, addOrganizationMember, updateOrganizationMemberStatus } from '@/lib/firebase/firestore/organizationMembers';
 import { updateUserActiveOrganization as updateUserActiveOrgInFirestore } from '@/lib/firebase/firestore/users';
+import { getPendingInvitationsForUser, acceptInvitationInFirestore, declineInvitationInFirestore } from '@/lib/firebase/firestore/invitations';
 import { useRouter } from 'next/navigation';
 
 
@@ -26,13 +27,16 @@ interface AuthContextType {
   currentUser: AuthenticatedUser | null;
   firebaseUser: FirebaseUser | null;
   loading: boolean;
-  requiresOrganizationCreation: boolean; // True if user has NO organizations with 'active' status
+  requiresOrganizationCreation: boolean; 
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   updateUserDisplayNameAndPhoto: (displayName: string, photoURL?: string | null) => Promise<void>;
   refreshUserProfile: () => Promise<void>;
   selectActiveOrganization: (organizationId: string, targetPath?: string) => Promise<void>;
   leaveOrganization: (organizationId: string) => Promise<void>;
+  acceptUserInvitation: (invitation: Invitation) => Promise<void>;
+  declineUserInvitation: (invitationId: string) => Promise<void>;
+  pendingInvitations: Invitation[];
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -42,6 +46,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [requiresOrganizationCreation, setRequiresOrganizationCreation] = useState(false);
+  const [pendingInvitations, setPendingInvitations] = useState<Invitation[]>([]);
   const { toast } = useToast();
   const router = useRouter();
 
@@ -51,7 +56,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let userRoleFromClaims: UserRole = 'reader';
 
     try {
-      const tokenResult = await fbUser.getIdTokenResult(true); // Force refresh token for latest claims
+      const tokenResult = await fbUser.getIdTokenResult(true); 
       userRoleFromClaims = (tokenResult.claims.role as UserRole) || 'reader';
     } catch (error) {
       console.warn("Warning: Error fetching token result for role.", error);
@@ -71,19 +76,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: serverTimestamp() as Timestamp,
       };
       await setDoc(userRef, userProfileData);
-      // Fetch again to get server timestamps resolved
       userDoc = await getDoc(userRef); 
       userProfileData = userDoc.data() as UserProfile;
     } else {
       userProfileData = userDoc.data() as UserProfile;
-      // Update role from claims if it differs from Firestore, or if Firestore role is missing
       if (userProfileData.role !== userRoleFromClaims || !userProfileData.role) {
         await updateDoc(userRef, { role: userRoleFromClaims, updatedAt: serverTimestamp() });
         userProfileData.role = userRoleFromClaims;
       }
     }
     
-    const memberships = await getUserOrganizationMemberships(fbUser.uid); // Fetches only 'active' status memberships
+    const memberships = await getUserOrganizationMemberships(fbUser.uid); 
+    const userInvitations = fbUser.email ? await getPendingInvitationsForUser(fbUser.email) : [];
+    setPendingInvitations(userInvitations);
+
     let activeOrgId = userProfileData.activeOrganizationId;
     let currentOrgRole: UserRole | null = null;
 
@@ -120,19 +126,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       currentOrganizationId: activeOrgId,
       currentOrganizationRole: currentOrgRole,
       organizationMemberships: memberships, 
+      pendingInvitations: userInvitations,
     };
 
-  }, [toast]); // Added toast to dependencies of syncUserProfile
+  }, []); 
 
 
   const refreshUserProfile = useCallback(async () => {
     if (auth.currentUser) {
+      setLoading(true); // Indicate loading during refresh
       try {
         const updatedProfile = await syncUserProfile(auth.currentUser);
         setCurrentUser(updatedProfile);
       } catch (error) {
         console.error("Error refreshing user profile:", error);
         toast({ title: "Error", description: "Could not refresh user profile data.", variant: "destructive" });
+      } finally {
+        setLoading(false);
       }
     }
   }, [syncUserProfile, toast]);
@@ -147,19 +157,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setCurrentUser(userProfile);
         } catch (error) {
             console.error("Error syncing user profile on auth state change:", error);
-            setCurrentUser(null); // Ensure consistent state on error
+            setCurrentUser(null); 
             toast({ title: "Profile Sync Error", description: "Could not load your profile information.", variant: "destructive"});
         } finally {
             setLoading(false);
         }
       } else {
         setCurrentUser(null);
+        setPendingInvitations([]);
         setRequiresOrganizationCreation(false); 
         setLoading(false);
       }
     });
     return () => unsubscribe();
-  }, [syncUserProfile, toast]); // Added toast to dependencies of useEffect
+  }, [syncUserProfile, toast]); 
 
   const selectActiveOrganization = useCallback(async (organizationId: string, targetPath?: string) => {
     if (!currentUser || !firebaseUser) {
@@ -177,26 +188,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
     }
 
-    if (currentUser.currentOrganizationId !== organizationId) {
-      // Consider showing a specific loading indicator if this is a long operation,
-      // but global 'setLoading(true)' might be too disruptive.
-      // The calling component can manage its own 'isProcessing' state.
-    }
-
     try {
         if (currentUser.currentOrganizationId !== organizationId) {
             await updateUserActiveOrgInFirestore(firebaseUser.uid, organizationId);
-            await refreshUserProfile(); 
         }
+        // Refresh profile *after* updating active org, then navigate
+        await refreshUserProfile(); 
         
         if (targetPath && typeof window !== 'undefined') {
             router.push(targetPath);
         } else if (typeof window !== 'undefined') {
-             router.push(`/organization/${organizationId}/wiki`); // Default to org wiki
+             router.push(`/organization/${organizationId}/wiki`); 
         }
     } catch (error) {
         console.error("Error selecting active organization:", error);
         toast({ title: "Error Switching Organization", description: (error as Error).message || "Could not switch organization.", variant: "destructive" });
+         await refreshUserProfile(); // Refresh even on error to ensure consistent state
     }
   }, [currentUser, firebaseUser, refreshUserProfile, router, toast]);
 
@@ -206,16 +213,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-      // `onAuthStateChanged` will handle profile syncing and subsequent state updates.
-      // Toast for successful login can be shown here or after profile sync,
-      // depending on desired UX. For now, keeping it simple.
       toast({ title: 'Login Successful', description: 'Welcome!' });
     } catch (error) {
       console.error("Error signing in with Google:", error);
       toast({ title: 'Login Failed', description: (error as Error).message || 'Could not sign in with Google. Please try again.', variant: 'destructive' });
       setLoading(false); 
     }
-    // setLoading(false) will be called by onAuthStateChanged's handler.
   }, [toast]);
 
   const logout = useCallback(async () => {
@@ -225,13 +228,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await updateUserActiveOrgInFirestore(currentUser.uid, null);
       }
       await signOut(auth);
-      // `onAuthStateChanged` will set currentUser to null and loading to false.
       toast({ title: 'Logged Out', description: 'You have been successfully logged out.' });
       if (typeof window !== 'undefined') router.push('/login');
     } catch (error) {
       console.error("Error signing out:", error);
       toast({ title: 'Logout Failed', description: (error as Error).message || 'Could not sign out. Please try again.', variant: 'destructive' });
-      setLoading(false); // Ensure loading is false on error
+      setLoading(false); 
     }
   }, [toast, router, currentUser?.uid]);
 
@@ -240,7 +242,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       toast({ title: 'Error', description: 'No user logged in.', variant: 'destructive' });
       throw new Error('No user logged in');
     }
-    // setLoading(true); // Consider if global loading is desired here.
     try {
       const updatePayload: { displayName?: string; photoURL?: string | null } = { displayName };
       if (photoURL !== undefined) {
@@ -257,15 +258,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         firestoreUpdatePayload.photoURL = photoURL;
       }
       await updateDoc(userRef, firestoreUpdatePayload);
-      await refreshUserProfile(); // This will update the currentUser state in the context
+      await refreshUserProfile(); 
       
       toast({ title: 'Profile Updated', description: 'Your profile has been updated.' });
     } catch (error) {
       console.error("Error updating profile:", error);
       toast({ title: 'Update Failed', description: (error as Error).message || 'Could not update profile.', variant: 'destructive' });
-      throw error; // Re-throw for component to handle
-    } finally {
-      // setLoading(false);
+      throw error; 
     }
   }, [toast, refreshUserProfile]);
 
@@ -282,23 +281,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      await updateOrganizationMemberStatus(membership.id, 'inactive'); // Set status to inactive
+      await updateOrganizationMemberStatus(membership.id, 'inactive'); 
       
-      // If leaving the currently active organization, clear it from user's profile in Firestore
       if (currentUser.currentOrganizationId === organizationId) {
         await updateUserActiveOrgInFirestore(firebaseUser.uid, null);
       }
       
-      // Crucial: Refresh user profile to update memberships and active org state
       await refreshUserProfile(); 
-      
-      // Success toast is better handled by the calling page for context.
+      toast({title: 'Left Organization', description: 'You have successfully left the organization.'});
     } catch (error) {
       console.error("Error leaving organization:", error);
       toast({ title: "Error Leaving Organization", description: (error as Error).message || "Could not process request.", variant: "destructive"});
       throw error; 
     }
   }, [currentUser, firebaseUser, refreshUserProfile, toast]);
+
+  const acceptUserInvitation = useCallback(async (invitation: Invitation) => {
+    if (!currentUser || !firebaseUser || !invitation.id) {
+        toast({ title: "Error", description: "User not authenticated or invitation is invalid.", variant: "destructive" });
+        throw new Error("User not authenticated or invitation is invalid.");
+    }
+    try {
+        await acceptInvitationInFirestore(invitation.id);
+        await addOrganizationMember(invitation.organizationId, firebaseUser.uid, invitation.roleToAssign, 'active');
+        await refreshUserProfile();
+        toast({ title: "Invitation Accepted", description: `You are now a member of "${invitation.organizationName || 'the organization'}".` });
+    } catch (error) {
+        console.error("Error accepting invitation:", error);
+        toast({ title: "Accept Failed", description: (error as Error).message || "Could not accept invitation.", variant: "destructive" });
+        await refreshUserProfile(); // Refresh even on error
+        throw error;
+    }
+  }, [currentUser, firebaseUser, refreshUserProfile, toast]);
+
+  const declineUserInvitation = useCallback(async (invitationId: string) => {
+     if (!invitationId) {
+        toast({ title: "Error", description: "Invitation ID is missing.", variant: "destructive" });
+        throw new Error("Invitation ID is missing.");
+    }
+    try {
+        await declineInvitationInFirestore(invitationId);
+        await refreshUserProfile();
+        toast({ title: "Invitation Declined", description: "You have declined the invitation." });
+    } catch (error) {
+        console.error("Error declining invitation:", error);
+        toast({ title: "Decline Failed", description: (error as Error).message || "Could not decline invitation.", variant: "destructive" });
+        await refreshUserProfile(); // Refresh even on error
+        throw error;
+    }
+  }, [refreshUserProfile, toast]);
   
   const contextValue = {
     currentUser,
@@ -311,11 +342,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshUserProfile,
     selectActiveOrganization,
     leaveOrganization,
+    acceptUserInvitation,
+    declineUserInvitation,
+    pendingInvitations,
   };
 
   return (
     <AuthContext.Provider value={contextValue}>
-      {/* More selective loading screen: only show if auth is loading AND we are not on public pages like /login or / */}
       {loading && typeof window !== 'undefined' && !['/login', '/', '/features'].includes(window.location.pathname) ? ( 
          <div className="flex h-screen items-center justify-center bg-background">
            <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -333,4 +366,3 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
-

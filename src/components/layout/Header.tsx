@@ -4,6 +4,7 @@ import { BookOpenText } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { UserProfileDropdown } from '@/components/auth/UserProfileDropdown';
+import { NotificationBell } from '@/components/notifications/NotificationBell'; // Added import
 
 export function Header() {
   return (
@@ -21,10 +22,10 @@ export function Header() {
         </nav>
         <div className="flex items-center space-x-2">
           <ThemeToggle />
+          <NotificationBell /> {/* Added NotificationBell component */}
           <UserProfileDropdown />
         </div>
       </div>
     </header>
   );
 }
-
