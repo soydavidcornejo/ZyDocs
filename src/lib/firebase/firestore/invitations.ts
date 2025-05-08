@@ -61,6 +61,11 @@ export const createInvitationInFirestore = async (
 
 /**
  * Retrieves all pending invitations for a given organization.
+ * IMPORTANT: This query requires a composite index in Firestore.
+ * If you see an error like "The query requires an index...", create an index on the 'invitations' collection with:
+ * - organizationId (Ascending)
+ * - status (Ascending)
+ * - createdAt (Descending)
  * @param organizationId The ID of the organization.
  * @returns A promise that resolves to an array of Invitation objects.
  */
@@ -87,6 +92,14 @@ export const getPendingInvitationsForOrganization = async (organizationId: strin
 
 /**
  * Retrieves all pending invitations for a given user email.
+ * IMPORTANT: This query requires a composite index in Firestore.
+ * If you see an error like "FirebaseError: The query requires an index..." during login or profile sync,
+ * you MUST create a composite index in your Firebase Firestore console for the 'invitations' collection.
+ * The required index fields are:
+ * 1. invitedUserEmail (Ascending)
+ * 2. status (Ascending)
+ * 3. createdAt (Descending)
+ * The error message from Firebase usually provides a direct link to create this index.
  * @param userEmail The email of the user.
  * @returns A promise that resolves to an array of Invitation objects.
  */
@@ -165,3 +178,4 @@ export const cancelInvitationInFirestore = async (invitationId: string): Promise
         throw new Error('Failed to cancel invitation.');
     }
 };
+
