@@ -87,6 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let activeOrgId = userProfileData.activeOrganizationId;
     let currentOrgRole: UserRole | null = null;
 
+    // Crucially, memberships here are *only those with status: 'active'*.
     if (memberships.length === 0) {
       setRequiresOrganizationCreation(true);
       activeOrgId = null; // Ensure activeOrgId is null if no active memberships
@@ -96,15 +97,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } else {
       setRequiresOrganizationCreation(false);
-      const activeMembership = memberships.find(m => m.organizationId === activeOrgId); // Already filtered by 'active' status
+      const activeMembership = memberships.find(m => m.organizationId === activeOrgId); // Check if current activeOrgId is in the list of *active* memberships
       if (activeMembership) {
         currentOrgRole = activeMembership.role;
       } else {
-        // No valid active org selected from the available active memberships.
-        // Don't auto-select. Let UI (e.g. /organizations page) handle selection.
+        // Current activeOrgId is not valid (e.g., user left it, or it was never set, or it's for an inactive membership)
         activeOrgId = null; 
         currentOrgRole = null;
-        if (userProfileData.activeOrganizationId) { // Clear invalid active org from DB
+        if (userProfileData.activeOrganizationId) { // Clear invalid active org from DB if it was set
              await updateUserActiveOrgInFirestore(fbUser.uid, null);
              userProfileData.activeOrganizationId = null;
         }
@@ -121,7 +121,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ...resolvedUserProfile,
       currentOrganizationId: activeOrgId,
       currentOrganizationRole: currentOrgRole,
-      organizationMemberships: memberships, // These are already filtered to 'active'
+      organizationMemberships: memberships, // These are already filtered to 'active' status
     };
 
   }, []);
@@ -129,7 +129,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshUserProfile = useCallback(async () => {
     if (auth.currentUser) {
-      setLoading(true);
+      // setLoading(true); // Avoid global loading for internal refresh if possible, let callers manage UI.
       try {
         const updatedProfile = await syncUserProfile(auth.currentUser);
         setCurrentUser(updatedProfile);
@@ -137,10 +137,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.error("Error refreshing user profile:", error);
         toast({ title: "Error", description: "Could not refresh user profile.", variant: "destructive" });
       } finally {
-        setLoading(false);
+        // setLoading(false);
       }
     } else {
-      setLoading(false); // Ensure loading is false if no user
+      // setLoading(false); // Ensure loading is false if no user
     }
   }, [syncUserProfile, toast]);
 
@@ -170,7 +170,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const selectActiveOrganization = useCallback(async (organizationId: string, targetPath?: string) => {
     if (!currentUser || !firebaseUser) {
         toast({ title: "Error", description: "User not authenticated.", variant: "destructive" });
-        router.push('/login');
+        if (typeof window !== 'undefined') router.push('/login');
         return;
     }
     
@@ -179,36 +179,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!isValidSelection) {
         toast({ title: "Selection Error", description: "Cannot select this organization. It may be inactive or you are no longer a member.", variant: "destructive" });
         await refreshUserProfile(); 
-        router.push('/organizations'); 
+        if (typeof window !== 'undefined') router.push('/organizations'); 
         return;
     }
 
-    // Set loading to true only if we are actually performing the selection and navigation.
-    // If the organization is already active and we're just navigating, no need for global loading.
-    let didPerformSelection = false;
+    let isSwitchingOrg = false;
     if (currentUser.currentOrganizationId !== organizationId) {
-        setLoading(true);
-        didPerformSelection = true;
+        isSwitchingOrg = true;
+        // setLoading(true); // Let calling component manage its own 'isProcessing' state for specific button.
+                           // Global loading might be too disruptive if it's just a navigation within an already active org.
     }
 
     try {
-        if (currentUser.currentOrganizationId !== organizationId) {
+        if (isSwitchingOrg) {
             await updateUserActiveOrgInFirestore(firebaseUser.uid, organizationId);
-            await refreshUserProfile(); 
+            await refreshUserProfile(); // This updates currentUser state, including currentOrganizationId and role
         }
+        
         // Navigation logic
         if (targetPath) {
-            router.push(targetPath);
+            if (typeof window !== 'undefined') router.push(targetPath);
         } else {
-            router.push('/organizations');
+            if (typeof window !== 'undefined') router.push('/organizations'); // Default if no targetPath
         }
     } catch (error) {
         console.error("Error selecting active organization:", error);
         toast({ title: "Error", description: "Could not switch organization.", variant: "destructive" });
+        // Potentially re-throw if the calling component needs to handle it, e.g., to stop a spinner.
+        // throw error;
     } finally {
-        if (didPerformSelection) {
-          setLoading(false); 
-        }
+        // if (isSwitchingOrg) {
+        //   setLoading(false); 
+        // }
     }
   }, [currentUser, firebaseUser, refreshUserProfile, router, toast]);
 
@@ -219,7 +221,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
       toast({ title: 'Login Successful', description: 'Welcome!' });
-      // onAuthStateChanged will handle further actions.
+      // onAuthStateChanged will handle further actions and profile syncing.
     } catch (error) {
       console.error("Error signing in with Google:", error);
       toast({ title: 'Login Failed', description: 'Could not sign in with Google. Please try again.', variant: 'destructive' });
@@ -235,7 +237,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       await signOut(auth);
       toast({ title: 'Logged Out', description: 'You have been successfully logged out.' });
-      router.push('/login');
+      if (typeof window !== 'undefined') router.push('/login');
     } catch (error) {
       console.error("Error signing out:", error);
       toast({ title: 'Logout Failed', description: 'Could not sign out. Please try again.', variant: 'destructive' });
@@ -281,33 +283,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const leaveOrganization = useCallback(async (organizationId: string) => {
     if (!currentUser || !firebaseUser) {
       toast({ title: "Error", description: "User not authenticated.", variant: "destructive" });
-      throw new Error("User not authenticated."); // This error will be caught by the caller
+      throw new Error("User not authenticated.");
     }
     
     const membership = currentUser.organizationMemberships?.find(mem => mem.organizationId === organizationId && mem.status === 'active');
     if (!membership || !membership.id) {
       toast({ title: "Error", description: "Membership not found or already inactive.", variant: "destructive" });
-      throw new Error("Membership not found or already inactive."); // This error will be caught by the caller
+      throw new Error("Membership not found or already inactive.");
     }
 
-    setLoading(true); // Set global loading state *before* async operations
+    // setLoading(true); // Let the calling component manage its `isProcessing` state for the button.
+                       // Global loading might be too disruptive.
 
     try {
       await updateOrganizationMemberStatus(membership.id, 'inactive');
       
       if (currentUser.currentOrganizationId === organizationId) {
+        // If leaving the currently active organization, clear it.
         await updateUserActiveOrgInFirestore(firebaseUser.uid, null);
       }
       
-      await refreshUserProfile(); // This is critical and handles its own loading internally for the refresh part
-      // Success toast is handled by the caller (organizations/page.tsx)
+      await refreshUserProfile(); // This is critical. It will update currentUser,
+                                  // including removing the inactive membership from the list
+                                  // and clearing currentOrganizationId if it was the one left.
+      // Success toast is handled by the caller page for better context.
     } catch (error) {
-      // Error is re-thrown to be handled by the caller.
       console.error("Error during leaveOrganization process:", error);
-      // The caller (organizations/page.tsx) should handle its own UI updates (e.g. spinner) and toasts for errors.
+      // Re-throw to allow caller to handle UI updates (e.g., stop spinner) and specific error display.
       throw error; 
     } finally {
-        setLoading(false); // Reset global loading state for the overall leave operation
+        // setLoading(false); // Global loading should not be managed here if not set at the start of this specific function.
     }
   }, [currentUser, firebaseUser, refreshUserProfile, toast]);
   
@@ -326,7 +331,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider value={contextValue}>
-      {loading && typeof window !== 'undefined' && window.location.pathname !== '/login' && window.location.pathname !== '/' ? ( 
+      {loading && typeof window !== 'undefined' && !['/login', '/'].includes(window.location.pathname) ? ( 
          <div className="flex h-screen items-center justify-center bg-background">
            <Loader2 className="h-8 w-8 animate-spin text-primary" />
            <span className="ml-2 text-lg text-foreground">Initializing ZyDocs...</span>

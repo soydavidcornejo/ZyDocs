@@ -35,7 +35,7 @@ export default function OrganizationsPage() {
         setIsLoadingOrganizations(true);
         Promise.all(
           currentUser.organizationMemberships
-            .filter(mem => mem.status === 'active')
+            .filter(mem => mem.status === 'active') // Already filtering for active, but good to be explicit
             .map(async (mem) => {
               const orgDetails = await getOrganizationDetails(mem.organizationId);
               return { 
@@ -53,39 +53,46 @@ export default function OrganizationsPage() {
             setIsLoadingOrganizations(false);
         });
       } else {
-        setOrganizations([]);
+        setOrganizations([]); // No active memberships
         setIsLoadingOrganizations(false);
       }
     }
   }, [currentUser, authLoading, router, toast]);
 
-  const handleNavigateToOrgSection = async (organizationId: string, sectionBasePath: string) => {
-    setIsProcessing(organizationId);
-    try {
-      // selectActiveOrganization will handle navigation if targetPath is provided.
-      // It also handles the case where the org is already active.
-      await selectActiveOrganization(organizationId, `${sectionBasePath}`);
-    } catch (error) {
-      // Error handling for selectActiveOrganization is within AuthContext, including toasts
-      // but we might want to stop processing indicator here if navigation doesn't happen
-      setIsProcessing(null);
+  const handleNavigateToOrgSection = async (organizationId: string, sectionPath: string) => {
+    // Check if we are trying to navigate to a section of an org that isn't currently active
+    if (currentUser?.currentOrganizationId !== organizationId) {
+      setIsProcessing(organizationId); // Set processing only if an org switch is involved
     }
-    // setIsProcessing(null) should ideally be handled after navigation is confirmed
-    // or if selectActiveOrganization completes without navigation (e.g. error)
-    // Since selectActiveOrganization now handles nav, this will be reset on page change or error.
+    try {
+      // selectActiveOrganization handles setting the org active (if needed) and then navigates.
+      await selectActiveOrganization(organizationId, sectionPath);
+    } catch (error) {
+      // Errors (e.g., toast) are handled within selectActiveOrganization
+      console.error(`Navigation/selection error for org ${organizationId} to ${sectionPath}:`, error);
+    } finally {
+      // Reset processing state if it was set for this org.
+      // This is important if navigation fails or if selectActiveOrganization handles its own loading indicators correctly.
+      if (currentUser?.currentOrganizationId !== organizationId) {
+         setIsProcessing(null);
+      }
+    }
   };
 
 
   const handleLeaveOrganization = async (organizationId: string, organizationName?: string) => {
     setIsProcessing(organizationId);
     try {
-      await leaveOrganization(organizationId);
-      toast({
+      await leaveOrganization(organizationId); // AuthContext handles refresh and toasts for success/internal errors
+      toast({ // This toast is for this page's context if leaveOrganization itself doesn't toast success
         title: 'Left Organization',
         description: `You have successfully left "${organizationName || 'the organization'}".`,
       });
+      // No explicit refreshUserProfile here, as leaveOrganization in AuthContext should handle it.
+      // The organizations list will update via useEffect hook listening to currentUser changes.
     } catch (error) {
-      console.error('Error leaving organization:', error);
+      // This catch is for errors thrown by leaveOrganization, which should be specific user-facing messages.
+      console.error('Error leaving organization from page:', error);
       toast({
         title: 'Error Leaving Organization',
         description: (error as Error).message || 'Could not leave the organization. Please try again.',
@@ -106,6 +113,7 @@ export default function OrganizationsPage() {
   }
   
   if (!currentUser) {
+    // This should be caught by the AppLayout, but as a fallback:
     return <div className="flex h-[calc(100vh-4rem)] items-center justify-center">Redirecting to login...</div>;
   }
 
@@ -149,14 +157,15 @@ export default function OrganizationsPage() {
                     variant="outline" 
                     className="w-full mb-2" 
                     onClick={() => handleNavigateToOrgSection(org.organizationId, `/organization/${org.organizationId}/wiki`)}
+                    // Disable if processing this org AND it's not the current one (i.e., an org switch is happening)
                     disabled={isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId}
                   >
+                    {/* Show loader if processing this org for a switch */}
                     {isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BookOpenText className="mr-2 h-4 w-4" />}
                      View Wiki
                    </Button>
               </CardContent>
               <CardFooter className="flex flex-col space-y-2 pt-4 border-t">
-                {/* Removed explicit "Set Active" button */}
                 <div className="flex w-full space-x-2">
                   {org.role === 'admin' && (
                     <Button 
@@ -165,7 +174,7 @@ export default function OrganizationsPage() {
                         onClick={() => handleNavigateToOrgSection(org.organizationId, `/organization/${org.organizationId}/settings`)}
                         disabled={isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId}
                     >
-                        {isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId && !router.asPath.includes('settings') ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings className="mr-2 h-4 w-4" />}
+                        {isProcessing === org.organizationId && currentUser?.currentOrganizationId !== org.organizationId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings className="mr-2 h-4 w-4" />}
                         Settings
                     </Button>
                   )}
@@ -174,10 +183,11 @@ export default function OrganizationsPage() {
                       <Button 
                         variant="outline" 
                         className={`flex-1 ${org.role === 'admin' ? '' : 'w-full'}`}
-                        disabled={isProcessing === org.organizationId || authLoading || (org.isOwner && organizations.filter(o => o.organizationId === org.organizationId && o.role === 'admin').length <=1 && org.role === 'admin' )}
+                        disabled={isProcessing === org.organizationId || (org.isOwner && organizations.filter(o => o.organizationId === org.organizationId && o.role === 'admin').length <=1 && org.role === 'admin' )}
                         title={(org.isOwner && organizations.filter(o => o.organizationId === org.organizationId && o.role === 'admin').length <=1 && org.role === 'admin' ) ? "Owner cannot leave if they are the only admin" : "Leave organization"}
                       >
-                        <LeaveIcon className="mr-2 h-4 w-4" /> Leave
+                        {isProcessing === org.organizationId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> :<LeaveIcon className="mr-2 h-4 w-4" />}
+                         {isProcessing === org.organizationId ? "Leaving..." : "Leave"}
                       </Button>
                     </AlertDialogTrigger>
                     <AlertDialogContent>
@@ -227,3 +237,4 @@ export default function OrganizationsPage() {
     </div>
   );
 }
+
