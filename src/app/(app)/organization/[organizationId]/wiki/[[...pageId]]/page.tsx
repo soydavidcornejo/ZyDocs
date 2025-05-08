@@ -22,15 +22,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { DocumentTree } from "@/components/document/DocumentTree";
 import WysiwygEditor from "@/components/editor/WysiwygEditor";
 import { CreatePageModal } from '@/components/document/CreatePageModal';
-import { createDocumentInFirestore, getDocumentsForOrganization, updateDocumentInFirestore, getDocumentById } from '@/lib/firebase/firestore/documents';
+import { createDocumentInFirestore, getDocumentsForOrganization, updateDocumentInFirestore, getDocumentById, deleteDocumentAndChildren } from '@/lib/firebase/firestore/documents';
 import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations';
 import type { DocumentNode } from '@/types/document';
 import type { Organization } from '@/types/organization';
 import { buildDocumentTree, findDocumentInList } from '@/config/docs';
-import { Loader2, Edit3, Save, BookOpen, PlusCircle, XCircle, Home } from 'lucide-react';
+import { Loader2, Edit3, Save, BookOpen, PlusCircle, XCircle, Home, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 
 const WIKI_TREE_STATE_KEY_PREFIX = 'zyDocsWikiTreeState_';
 
@@ -56,7 +57,7 @@ const WikiSidebarContent = ({
   setExpandedItems: (items: string[]) => void;
   onPageCreated: (newPageId?: string) => void;
 }) => {
-  const { setOpen } = useSidebar(); // Removed 'open' as it's not directly used here.
+  const { setOpen } = useSidebar();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   const handleCreatePage = () => {
@@ -116,7 +117,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   
   const { organizationId } = params;
   const currentPageIdFromSlug = params.pageId?.[0];
-  const searchParams = useSearchParams(); // Needs Suspense Boundary
+  const searchParams = useSearchParams(); 
   const editModeQuery = searchParams.get('edit') === 'true';
 
   const [currentDocument, setCurrentDocument] = useState<DocumentNode | null>(null);
@@ -128,6 +129,9 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [isFetchingOrg, setIsFetchingOrg] = useState(true);
   const [isFetchingDocs, setIsFetchingDocs] = useState(true);
+
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [pageToDelete, setPageToDelete] = useState<DocumentNode | null>(null);
 
   const wikiTreeStorageKey = useMemo(() => `${WIKI_TREE_STATE_KEY_PREFIX}${organizationId}`, [organizationId]);
   const [expandedItems, setExpandedItems] = useState<string[]>(() => {
@@ -165,7 +169,6 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
         if (currentUser && currentUser.currentOrganizationId !== organizationId) {
           const targetPath = `/organization/${organizationId}/wiki${currentPageIdFromSlug ? `/${currentPageIdFromSlug}` : ''}${editModeQuery ? '?edit=true' : ''}`;
           await selectActiveOrganization(organizationId, targetPath);
-          // Re-fetch of documents will be triggered by currentUser change or if org becomes active.
         }
       }
     } catch (error) {
@@ -178,12 +181,11 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
 
   const fetchDocuments = useCallback(async (selectPageId?: string) => {
     if (!organizationId || !currentUser || currentUser.currentOrganizationId !== organizationId) {
-      // Prevent fetching if orgId is not set, user not logged in, or this is not the active org yet
       setIsFetchingDocs(false);
       return;
     }
     setIsFetchingDocs(true);
-    setIsLoadingContent(true); // For page content specific loading
+    setIsLoadingContent(true);
     try {
       const fetchedDocs = await getDocumentsForOrganization(organizationId);
       setAllDocumentsFlat(fetchedDocs); 
@@ -196,12 +198,7 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
         const doc = findDocumentInList(fetchedDocs, pageIdToUse);
         setCurrentDocument(doc);
         setEditedContent(doc?.content || '');
-        if (doc && doc.parentId && !expandedItems.includes(`item-${doc.parentId}`)) {
-             setExpandedItems(prev => [...new Set([...prev, `item-${doc.parentId}`])]);
-        } else if (doc && !doc.parentId && currentPageIdFromSlug === doc.id) {
-            // If it's a root page and selected, ensure it's not unexpectedly collapsed.
-            // Though root items in accordion usually don't collapse unless their parent (Accordion itself) does.
-        }
+        // Auto-expand parent logic moved to separate useEffect based on allDocumentsFlat and currentPageIdFromSlug
       } else {
         setCurrentDocument(null);
         setEditedContent('');
@@ -213,44 +210,40 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
       setIsLoadingContent(false);
       setIsFetchingDocs(false);
     }
-  }, [organizationId, currentUser, currentPageIdFromSlug, toast, expandedItems]); // expandedItems added to dependencies
+  }, [organizationId, currentUser, currentPageIdFromSlug, toast]);
 
-  // Effect to fetch organization details when component mounts or organizationId changes
   useEffect(() => {
     if (!authLoading && currentUser) {
       fetchOrganizationDetails();
     } else if (!authLoading && !currentUser) {
-      // Redirect to login if user is not authenticated
       const redirectUrl = `/login?redirect=/organization/${organizationId}/wiki${currentPageIdFromSlug ? `/${currentPageIdFromSlug}` : ''}${editModeQuery ? '?edit=true' : ''}`;
       router.push(redirectUrl);
     }
   }, [authLoading, currentUser, organizationId, fetchOrganizationDetails, currentPageIdFromSlug, editModeQuery, router]);
 
-  // Effect to fetch documents when organization details are loaded and it's the active org
   useEffect(() => {
     if (organization && currentUser && currentUser.currentOrganizationId === organizationId) {
       fetchDocuments();
     }
-  }, [organization, currentUser, organizationId, fetchDocuments]); // Runs when org details or active org status changes
+  }, [organization, currentUser, organizationId, fetchDocuments]); 
 
-   // Effect to expand parent items when current page ID changes
   useEffect(() => {
     if (currentPageIdFromSlug && allDocumentsFlat.length > 0) {
-      const pathIdsToExpand = new Set<string>(expandedItems);
-      let currentDocId: string | null | undefined = currentPageIdFromSlug;
+      const pathIdsToExpand = new Set<string>(expandedItems); // Start with current expanded items
+      let currentDocForPathId: string | null | undefined = currentPageIdFromSlug;
       let changed = false;
 
-      while (currentDocId) {
-        const doc = findDocumentInList(allDocumentsFlat, currentDocId);
+      while (currentDocForPathId) {
+        const doc = findDocumentInList(allDocumentsFlat, currentDocForPathId);
         if (doc && doc.parentId) {
           const parentItemValue = `item-${doc.parentId}`;
           if (!pathIdsToExpand.has(parentItemValue)) {
             pathIdsToExpand.add(parentItemValue);
             changed = true;
           }
-          currentDocId = doc.parentId;
+          currentDocForPathId = doc.parentId;
         } else {
-          currentDocId = null;
+          currentDocForPathId = null; // Reached root or doc not found
         }
       }
       
@@ -259,12 +252,11 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPageIdFromSlug, allDocumentsFlat]); // Only run when these change, not expandedItems itself
+  }, [currentPageIdFromSlug, allDocumentsFlat]); // Only run when current page or flat docs change
   
 
   const handleSelectDocument = (id: string) => {
     const targetPath = `/organization/${organizationId}/wiki/${id}`;
-    
     if (isEditing && currentDocument && editedContent !== (currentDocument.content || '')) {
         if (confirm("You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.")) {
             router.push(isEditing ? `${targetPath}?edit=true` : targetPath);
@@ -275,14 +267,11 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   };
   
   const handlePageCreated = async (newPageId?: string) => {
-    // Re-fetch documents which will implicitly select the new page if newPageId is provided
     await fetchDocuments(newPageId); 
     if (newPageId) {
-        // Find the newly created page in the (now updated) flat list to determine its parent
-        const newFetchedDocs = await getDocumentsForOrganization(organizationId); // Re-fetch to ensure allDocumentsFlat is current
-        setAllDocumentsFlat(newFetchedDocs); // Update the flat list state explicitly
+        const newFetchedDocs = await getDocumentsForOrganization(organizationId); 
+        setAllDocumentsFlat(newFetchedDocs);
         const newPage = findDocumentInList(newFetchedDocs, newPageId);
-
         if(newPage && newPage.parentId && !expandedItems.includes(`item-${newPage.parentId}`)){
             setExpandedItems(prev => [...new Set([...prev, `item-${newPage.parentId}`])]);
         }
@@ -295,13 +284,11 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
     setIsLoadingContent(true);
     try {
       await updateDocumentInFirestore(currentDocument.id, { content: editedContent });
-      
       const updatedDocs = allDocumentsFlat.map(d => d.id === currentDocument.id ? { ...d, content: editedContent, updatedAt: new Date() } : d);
       setAllDocumentsFlat(updatedDocs);
       setCurrentDocument(prev => prev ? { ...prev, content: editedContent, updatedAt: new Date() } : null);
       const newTree = buildDocumentTree(updatedDocs);
       setDocumentTree(newTree);
-      
       toast({ title: 'Saved', description: 'Content changes saved successfully.' });
       router.push(`/organization/${organizationId}/wiki/${currentDocument.id}`); 
     } catch (error) {
@@ -316,7 +303,6 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
       toast({title: "Cannot Edit", description: "Please select a page to edit.", variant: "default"});
       return;
     }
-    
     const basePath = `/organization/${organizationId}/wiki/${currentDocument?.id || ''}`;
     if (isEditing) { 
         if (currentDocument && editedContent !== (currentDocument.content || '')) {
@@ -332,14 +318,46 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
     }
   };
 
+  const handleDeleteInitiate = (doc: DocumentNode) => {
+    setPageToDelete(doc);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!pageToDelete || !organizationId) return;
+    setIsLoadingContent(true);
+    try {
+        await deleteDocumentAndChildren(pageToDelete.id, organizationId);
+        toast({ title: 'Page Deleted', description: `"${pageToDelete.name}" and its sub-pages have been deleted.` });
+        
+        const parentIdOfDeletedPage = pageToDelete.parentId;
+        setIsDeleteDialogOpen(false);
+        setPageToDelete(null);
+        
+        await fetchDocuments(parentIdOfDeletedPage || undefined);
+        
+        if (parentIdOfDeletedPage) {
+            router.push(`/organization/${organizationId}/wiki/${parentIdOfDeletedPage}`);
+        } else {
+            router.push(`/organization/${organizationId}/wiki`);
+        }
+        // setIsLoadingContent(false) is handled by fetchDocuments
+    } catch (error) {
+        console.error("Error deleting page:", error);
+        toast({ title: 'Error Deleting Page', description: (error as Error).message, variant: 'destructive' });
+        setIsLoadingContent(false); // Ensure loader stops on error
+        setIsDeleteDialogOpen(false);
+        setPageToDelete(null);
+    }
+  };
+
+
   if (authLoading || isFetchingOrg || (!currentUser && !authLoading)) {
     return <div className="flex h-[calc(100vh-4rem)] w-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading Wiki...</div>;
   }
   
   const canEdit = currentUser?.organizationMemberships?.find(m => m.organizationId === organizationId && (m.role === 'admin' || m.role === 'editor'));
 
-  // If organization data is loaded, but it's not the active one, show a message or rely on AppLayout to redirect.
-  // This state might be hit if selectActiveOrganization is still processing or if there's a mismatch.
   if (organization && currentUser && currentUser.currentOrganizationId !== organizationId && !isFetchingOrg) {
      return (
         <div className="flex h-[calc(100vh-4rem)] w-full items-center justify-center">
@@ -348,10 +366,9 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
      );
   }
 
-
   return (
     <SidebarProvider defaultOpen>
-      <div className="flex h-[calc(100vh-4rem)] bg-background">
+      <div className="flex h-full bg-background"> {/* Changed from h-[calc(100vh-4rem)] to h-full */}
         <Sidebar collapsible="icon" className="border-r">
           {isFetchingDocs && documentTree.length === 0 ? (
              <div className="flex h-full items-center justify-center p-4">
@@ -406,23 +423,36 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
                 <>
                   <div className="flex justify-between items-center mb-4">
                     <h1 className="text-3xl font-bold">{currentDocument.name}</h1>
-                    {canEdit && (
-                        isEditing ? (
-                            <div className="space-x-2">
-                                <Button onClick={handleSaveContent} disabled={isLoadingContent} size="sm">
-                                    {isLoadingContent ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                                    {isLoadingContent ? 'Saving...' : 'Save'}
+                    <div className="flex items-center space-x-2">
+                        {canEdit && (
+                            isEditing ? (
+                                <>
+                                    <Button onClick={handleSaveContent} disabled={isLoadingContent} size="sm">
+                                        {isLoadingContent ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                        {isLoadingContent ? 'Saving...' : 'Save'}
+                                    </Button>
+                                    <Button variant="outline" onClick={toggleEditMode} size="sm">
+                                        <XCircle className="mr-2 h-4 w-4" /> Cancel
+                                    </Button>
+                                </>
+                            ) : (
+                                <Button onClick={toggleEditMode} variant="outline" size="sm">
+                                    <Edit3 className="mr-2 h-4 w-4" /> Edit Page
                                 </Button>
-                                <Button variant="outline" onClick={toggleEditMode} size="sm">
-                                    <XCircle className="mr-2 h-4 w-4" /> Cancel
-                                </Button>
-                            </div>
-                        ) : (
-                            <Button onClick={toggleEditMode} variant="outline" size="sm">
-                                <Edit3 className="mr-2 h-4 w-4" /> Edit Page
+                            )
+                        )}
+                         {canEdit && !isEditing && (
+                            <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={() => handleDeleteInitiate(currentDocument)}
+                                className="text-destructive hover:bg-destructive/10 border-destructive/50 hover:text-destructive"
+                                title="Delete Page"
+                            >
+                                <Trash2 className="mr-2 h-4 w-4" /> Delete
                             </Button>
-                        )
-                    )}
+                        )}
+                    </div>
                   </div>
 
                   {isEditing && canEdit ? (
@@ -461,6 +491,30 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
           </ScrollArea>
         </SidebarInset>
       </div>
+      {pageToDelete && (
+        <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Confirm Delete Page</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        Are you sure you want to delete the page &quot;{pageToDelete.name}&quot;?
+                        This will also delete all its sub-pages. This action cannot be undone.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel onClick={() => setIsDeleteDialogOpen(false)} disabled={isLoadingContent}>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                        onClick={handleDeleteConfirm}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        disabled={isLoadingContent}
+                    >
+                         {isLoadingContent ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                        Delete Page
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+    )}
     </SidebarProvider>
   );
 }
@@ -473,3 +527,4 @@ export default function OrganizationWikiPageWrapper({ params }: { params: { orga
     </Suspense>
   )
 }
+

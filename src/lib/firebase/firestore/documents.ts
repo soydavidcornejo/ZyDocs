@@ -1,6 +1,6 @@
 // src/lib/firebase/firestore/documents.ts
 import { db } from '@/lib/firebase/config';
-import { collection, addDoc, serverTimestamp, Timestamp, getDocs, query, where, orderBy, doc, updateDoc as updateFirestoreDoc, getDoc as getFirestoreDoc, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, Timestamp, getDocs, query, where, orderBy, doc, updateDoc as updateFirestoreDoc, getDoc as getFirestoreDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import type { DocumentNode } from '@/types/document';
 
 /**
@@ -64,6 +64,8 @@ export const getDocumentsForOrganization = async (organizationId: string): Promi
   const q = query(
     docsCollection,
     where("organizationId", "==", organizationId)
+    // No specific orderBy here to avoid needing complex composite indexes for basic fetch.
+    // buildDocumentTree handles sorting.
   );
   const snapshot = await getDocs(q);
   return snapshot.docs.map(docData => {
@@ -78,7 +80,7 @@ export const getDocumentsForOrganization = async (organizationId: string): Promi
       type: 'page', // All documents are of type 'page'
       parentId: data.parentId || null,
       content: data.content,
-      order: data.order,
+      order: data.order === undefined ? 0 : data.order, // Default order to 0 if undefined
       createdAt,
       updatedAt,
     } as DocumentNode;
@@ -128,7 +130,7 @@ export const getDocumentById = async (documentId: string): Promise<DocumentNode 
         type: 'page',
         parentId: data.parentId || null,
         content: data.content,
-        order: data.order,
+        order: data.order === undefined ? 0 : data.order, // Default order to 0 if undefined
         createdAt,
         updatedAt,
       } as DocumentNode;
