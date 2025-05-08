@@ -70,24 +70,31 @@ export const createInvitationInFirestore = async (
  * @returns A promise that resolves to an array of Invitation objects.
  */
 export const getPendingInvitationsForOrganization = async (organizationId: string): Promise<Invitation[]> => {
-  const invitationsCollection = collection(db, 'invitations');
-  const q = query(
-    invitationsCollection,
-    where("organizationId", "==", organizationId),
-    where("status", "==", "pending"),
-    orderBy("createdAt", "desc")
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(docData => {
-    const data = docData.data();
-    return {
-      id: docData.id,
-      ...data,
-      createdAt: (data.createdAt as Timestamp).toDate(),
-      updatedAt: (data.updatedAt as Timestamp).toDate(),
-      expiresAt: data.expiresAt ? (data.expiresAt as Timestamp).toDate() : undefined,
-    } as Invitation;
-  });
+  try {
+    const invitationsCollection = collection(db, 'invitations');
+    const q = query(
+      invitationsCollection,
+      where("organizationId", "==", organizationId),
+      where("status", "==", "pending"),
+      orderBy("createdAt", "desc")
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(docData => {
+      const data = docData.data();
+      return {
+        id: docData.id,
+        ...data,
+        createdAt: (data.createdAt as Timestamp).toDate(),
+        updatedAt: (data.updatedAt as Timestamp).toDate(),
+        expiresAt: data.expiresAt ? (data.expiresAt as Timestamp).toDate() : undefined,
+      } as Invitation;
+    });
+  } catch (error) {
+    console.error('Error fetching pending invitations for organization:', error);
+    // Depending on how critical this is, you might throw or return empty/handle error.
+    // For now, returning empty array to allow other parts of the settings page to load.
+    return []; 
+  }
 };
 
 /**
@@ -105,24 +112,31 @@ export const getPendingInvitationsForOrganization = async (organizationId: strin
  */
 export const getPendingInvitationsForUser = async (userEmail: string): Promise<Invitation[]> => {
   if (!userEmail) return [];
-  const invitationsCollection = collection(db, 'invitations');
-  const q = query(
-    invitationsCollection,
-    where("invitedUserEmail", "==", userEmail.toLowerCase()),
-    where("status", "==", "pending"),
-    orderBy("createdAt", "desc")
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(docData => {
-    const data = docData.data();
-    return {
-      id: docData.id,
-      ...data,
-      createdAt: (data.createdAt as Timestamp).toDate(),
-      updatedAt: (data.updatedAt as Timestamp).toDate(),
-      expiresAt: data.expiresAt ? (data.expiresAt as Timestamp).toDate() : undefined,
-    } as Invitation;
-  });
+  try {
+    const invitationsCollection = collection(db, 'invitations');
+    const q = query(
+      invitationsCollection,
+      where("invitedUserEmail", "==", userEmail.toLowerCase()),
+      where("status", "==", "pending"),
+      orderBy("createdAt", "desc")
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(docData => {
+      const data = docData.data();
+      return {
+        id: docData.id,
+        ...data,
+        createdAt: (data.createdAt as Timestamp).toDate(),
+        updatedAt: (data.updatedAt as Timestamp).toDate(),
+        expiresAt: data.expiresAt ? (data.expiresAt as Timestamp).toDate() : undefined,
+      } as Invitation;
+    });
+  } catch (error) {
+    console.error("Error fetching pending invitations for user (likely missing Firestore index):", error);
+    // Return empty array to prevent login/profile sync from breaking completely.
+    // The user/dev MUST create the Firestore index for this feature to work.
+    return [];
+  }
 };
 
 
