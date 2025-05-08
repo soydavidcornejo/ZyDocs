@@ -172,10 +172,10 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
         const doc = findDocumentInList(fetchedDocs, pageIdToSelect);
         setCurrentDocument(doc);
         setEditedContent(doc?.content || '');
+        // Direct parent expansion is handled here. Ancestor expansion is handled by useEffect below.
         if (doc && doc.parentId && !expandedItems.includes(`item-${doc.parentId}`)) {
-            setExpandedItems(prev => [...prev, `item-${doc.parentId}`]);
+            setExpandedItems(prev => [...new Set([...prev, `item-${doc.parentId}`])]);
         }
-
       } else {
         setCurrentDocument(null);
         setEditedContent('');
@@ -186,7 +186,36 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
     } finally {
       setIsLoadingContent(false);
     }
-  }, [organizationId, currentUser, currentPageIdFromSlug, toast, expandedItems]);
+  }, [organizationId, currentUser, currentPageIdFromSlug, toast]); // Removed expandedItems from dependencies
+
+  // Effect to expand all ancestors of the current page
+  useEffect(() => {
+    if (currentPageIdFromSlug && documents.length > 0) {
+      const pathIdsToExpand: string[] = [];
+      let currentDocId: string | null | undefined = currentPageIdFromSlug;
+
+      while (currentDocId) {
+        const doc = findDocumentInList(documents, currentDocId);
+        if (doc && doc.parentId) {
+          const parentItemValue = `item-${doc.parentId}`;
+          // Add to path if not already set to be expanded by this effect run
+          if (!expandedItems.includes(parentItemValue) && !pathIdsToExpand.includes(parentItemValue)) {
+            pathIdsToExpand.push(parentItemValue);
+          }
+          currentDocId = doc.parentId;
+        } else {
+          currentDocId = null; // Reached root or document/parent not found
+        }
+      }
+      
+      if (pathIdsToExpand.length > 0) {
+        // Add new path items to existing expanded items without duplicates
+        setExpandedItems(prev => [...new Set([...prev, ...pathIdsToExpand])]);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPageIdFromSlug, documents]); // Not including expandedItems in deps to prevent potential loops
+
 
   useEffect(() => {
     if (!authLoading && currentUser) {
@@ -199,7 +228,12 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   
 
   const handleSelectDocument = (id: string) => {
-    router.push(`/organization/${organizationId}/wiki/${id}`);
+    // If editing, prompt to save or cancel? For now, just navigate.
+    if(isEditing) {
+        router.push(`/organization/${organizationId}/wiki/${id}?edit=true`);
+    } else {
+        router.push(`/organization/${organizationId}/wiki/${id}`);
+    }
   };
   
   const handlePageCreated = async (newPageId?: string) => {
@@ -214,16 +248,19 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
     setIsLoadingContent(true);
     try {
       await updateDocumentInFirestore(currentDocument.id, { content: editedContent });
-      const updatedDoc = { ...currentDocument, content: editedContent, updatedAt: new Date() };
-      setCurrentDocument(updatedDoc);
-      setDocuments(docs => docs.map(d => d.id === updatedDoc.id ? updatedDoc : d));
-      const newTree = buildDocumentTree(documents.map(d => d.id === updatedDoc.id ? updatedDoc : d));
+      // Optimistically update local state before re-fetching or rely on re-fetch
+      const updatedDocs = documents.map(d => d.id === currentDocument.id ? { ...d, content: editedContent, updatedAt: new Date() } : d);
+      setDocuments(updatedDocs);
+      setCurrentDocument(prev => prev ? { ...prev, content: editedContent, updatedAt: new Date() } : null);
+      const newTree = buildDocumentTree(updatedDocs);
       setDocumentTree(newTree);
       
       toast({ title: 'Saved', description: 'Content changes saved successfully.' });
       router.push(`/organization/${organizationId}/wiki/${currentDocument.id}`); 
     } catch (error) {
       toast({ title: 'Error', description: 'Failed to save content.', variant: 'destructive' });
+      // Optionally re-fetch on error to ensure consistency
+      // await fetchDocuments(currentDocument.id);
     } finally {
       setIsLoadingContent(false);
     }
@@ -238,9 +275,9 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
     const targetPath = `/organization/${organizationId}/wiki/${currentDocument?.id || ''}`;
     if (isEditing) { 
         if (currentDocument) setEditedContent(currentDocument.content || ''); 
-        router.push(targetPath);
+        router.push(targetPath); // Exits edit mode by removing ?edit=true
     } else { 
-        router.push(`${targetPath}?edit=true`);
+        router.push(`${targetPath}?edit=true`); // Enters edit mode
     }
   };
 
@@ -257,13 +294,13 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
         <Sidebar collapsible="icon" className="border-r">
           <WikiSidebarContent
             organizationId={organizationId}
-            documents={documentTree}
+            documents={documentTree} // Pass the hierarchical tree
             currentDocumentId={currentPageIdFromSlug}
             onSelectDocument={handleSelectDocument}
             organizationName={organization.name || 'Organization'}
             expandedItems={expandedItems}
             setExpandedItems={setExpandedItems}
-            onPageCreated={handlePageCreated}
+            onPageCreated={() => handlePageCreated()} // Pass the actual new page ID in CreatePageModal's call
           />
         </Sidebar>
         <SidebarInset>
@@ -296,7 +333,8 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
                         isEditing ? (
                             <div className="space-x-2">
                                 <Button onClick={handleSaveContent} disabled={isLoadingContent} size="sm">
-                                    <Save className="mr-2 h-4 w-4" /> {isLoadingContent ? 'Saving...' : 'Save'}
+                                    {isLoadingContent ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                    {isLoadingContent ? 'Saving...' : 'Save'}
                                 </Button>
                                 <Button variant="outline" onClick={toggleEditMode} size="sm">
                                     <XCircle className="mr-2 h-4 w-4" /> Cancel
@@ -358,3 +396,4 @@ export default function OrganizationWikiPageWrapper({ params }: { params: { orga
     </Suspense>
   )
 }
+

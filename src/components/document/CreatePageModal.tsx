@@ -28,7 +28,7 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
   isOpen,
   onClose,
   organizationId,
-  allDocuments,
+  allDocuments, // This should be the hierarchical tree if used directly for display, or flat for logic
   onPageCreated,
   initialParentId = null,
 }) => {
@@ -36,6 +36,13 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
   const [parentId, setParentId] = useState<string | null>(initialParentId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
+
+  // The `allDocuments` prop here is used for selecting a parent.
+  // It should be a flat list of documents that can be parents.
+  const parentPageOptions = allDocuments
+    .filter(doc => doc.type === 'page') // Ensure only pages can be parents
+    .sort((a, b) => a.name.localeCompare(b.name));
+
 
   useEffect(() => {
     if (isOpen) {
@@ -52,13 +59,15 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
     }
     setIsSubmitting(true);
     try {
-      // Determine order for the new page. Could be improved with more sophisticated logic.
-      const siblings = allDocuments.filter(doc => doc.parentId === parentId);
+      // Determine order for the new page based on actual flat list.
+      // `allDocuments` passed to the modal should be the flat list from OrganizationWikiPageComponent.
+      const flatListOfAllDocs = allDocuments; // Assuming this is the flat list.
+      const siblings = flatListOfAllDocs.filter(doc => doc.parentId === parentId);
       const order = siblings.length > 0 ? Math.max(...siblings.map(s => s.order || 0)) + 1 : 0;
 
       const newPage = await createDocumentInFirestore(
         pageName.trim(),
-        parentId, // parentId is already null or a string ID
+        parentId, 
         organizationId,
         order,
         `# ${pageName.trim()}\n\nStart writing here...`
@@ -74,9 +83,6 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
     }
   };
 
-  // Prepare documents for the Select component (only pages that can be parents)
-  const parentPageOptions = allDocuments
-    .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -121,7 +127,7 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
                   </SelectItem>
                   {parentPageOptions.map((doc) => (
                     <SelectItem key={doc.id} value={doc.id}>
-                      {doc.name}
+                      {doc.name} {/* Display indentation or path if needed for clarity */}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -142,3 +148,4 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
     </Dialog>
   );
 };
+

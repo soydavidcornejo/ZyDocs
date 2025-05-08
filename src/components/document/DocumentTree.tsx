@@ -9,7 +9,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import type { DocumentNode } from "@/types/document";
-import { FileText, Folder, ChevronRight, Dot } from 'lucide-react'; // Removed Building icon
+import { FileText, Folder, ChevronRight, Dot } from 'lucide-react'; 
 
 interface DocumentTreeProps {
   nodes: DocumentNode[];
@@ -17,8 +17,8 @@ interface DocumentTreeProps {
   currentDocumentId?: string;
   onSelectDocument?: (id: string) => void;
   basePath: string; 
-  expandedItems: string[]; // State for expanded items
-  setExpandedItems: (items: string[]) => void; // Function to update expanded items
+  expandedItems: string[]; 
+  setExpandedItems: (items: string[]) => void; 
 }
 
 export const DocumentTree: React.FC<DocumentTreeProps> = ({ 
@@ -36,14 +36,14 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
 
   const getIcon = (type: DocumentNode['type'], hasChildren: boolean) => {
     if (type === 'page' && hasChildren) {
-      return <Folder className="h-4 w-4 mr-2 text-muted-foreground" />; // Page acting as container
+      return <Folder className="h-4 w-4 mr-2 text-muted-foreground" />; 
     }
     switch (type) {
-      case 'space': // 'space' type might represent a container page. Visually a folder.
+      case 'space': 
         return <Folder className="h-4 w-4 mr-2 text-muted-foreground" />;
       case 'page':
         return <FileText className="h-4 w-4 mr-2 text-muted-foreground" />;
-      default: // Should not happen for 'page' or 'space'
+      default: 
         return <Dot className="h-4 w-4 mr-2 text-muted-foreground" />;
     }
   };
@@ -54,48 +54,13 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
     setExpandedItems(value);
   };
 
-  // Determine initially open items for the current path. This should only run on initial mount or when currentDocumentId changes significantly.
-  // The expandedItems state now handles persistence.
-  React.useEffect(() => {
-    if (currentDocumentId) {
-      const path: string[] = [];
-      function findPath(nodesToScan: DocumentNode[], targetId: string): boolean {
-        for (const node of nodesToScan) {
-          if (node.id === targetId) {
-            if (node.parentId) { // Add parent to path if it exists
-              path.push(getItemValue({ id: node.parentId } as DocumentNode)); // Simplified for getItemValue
-              // Recursively find path for parent to open all ancestors
-              const parentNode = nodes.find(n => n.id === node.parentId); // Requires flat list or different tree traversal
-              if (parentNode) findPath(nodes, parentNode.id); // This needs adjustment if 'nodes' is not flat list here
-            }
-            return true;
-          }
-          if (node.children && findPath(node.children, targetId)) {
-            path.push(getItemValue(node));
-            return true;
-          }
-        }
-        return false;
-      }
-      
-      // To open ancestors, we need to traverse the tree structure passed (nodes)
-      // This logic might be simplified if buildDocumentTree also marks path to current node.
-      if(findPath(nodes, currentDocumentId)){
-         setExpandedItems(prev => {
-           const newItems = [...new Set([...prev, ...path.reverse()])];
-           return newItems;
-         });
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentDocumentId, nodes]); // Note: `nodes` in deps might cause re-runs if tree structure changes.
-
+  // Removed internal useEffect for ancestor expansion as it's now handled by the parent component.
 
   return (
     <Accordion 
         type="multiple" 
-        value={expandedItems} // Controlled component
-        onValueChange={handleAccordionChange} // Update state on change
+        value={expandedItems} 
+        onValueChange={handleAccordionChange} 
         className="w-full"
     >
       {nodes.map((node) => (
@@ -104,15 +69,12 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
             className={`py-1.5 px-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md text-sm 
             ${currentDocumentId === node.id ? 'bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90 hover:text-sidebar-primary-foreground' : 'text-sidebar-foreground'}
             ${level > 0 ? `pl-${(level * 2) + 2}` : ''}
-            justify-start group`} // `group` for chevron visibility
-            // No asChild, let AccordionTrigger render its own button structure for better accessibility & control
+            justify-start group`} 
           >
              <Link href={`${basePath}/${node.id}`} className="flex flex-1 items-center" onClick={onSelectDocument ? () => onSelectDocument(node.id): undefined}>
                 {getIcon(node.type, !!node.children && node.children.length > 0)}
                 <span className="truncate flex-1 text-left">{node.name}</span>
               </Link>
-              {/* Chevron should be managed by AccordionTrigger internally when not asChild */}
-              {/* If custom chevron is needed, place it outside the Link but inside Trigger */}
               {node.children && node.children.length > 0 && (
                 <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-90 ml-auto" />
               )}
