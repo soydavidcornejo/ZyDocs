@@ -70,7 +70,10 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
             ${level > 0 ? `pl-${(level * 2) + 2}` : ''}
             justify-start group`} 
           >
-             <Link href={`${basePath}/${node.id}`} className="flex flex-1 items-center" onClick={onSelectDocument ? () => onSelectDocument(node.id): undefined}>
+             <Link href={`${basePath}/${node.id}`} className="flex flex-1 items-center" onClick={onSelectDocument ? (e) => {
+                  e.preventDefault();
+                  onSelectDocument(node.id);
+                } : undefined} shallow>
                 {getIcon(node.type, !!node.children && node.children.length > 0)}
                 <span className="truncate flex-1 text-left">{node.name}</span>
                  {/* Chevron is now part of AccordionTrigger itself when not asChild or handled by child if asChild */}

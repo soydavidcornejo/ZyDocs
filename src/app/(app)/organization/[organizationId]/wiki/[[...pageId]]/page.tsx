@@ -2,7 +2,7 @@
 'use client';
 
 import type React from 'react';
-import { useEffect, useState, useCallback, Suspense, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
@@ -18,9 +18,13 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useResizeObserver } from '@/hooks/useResizeObserver';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DocumentTree } from "@/components/document/DocumentTree";
 import WysiwygEditor from "@/components/editor/WysiwygEditor";
+import { useDocumentRealtime } from '@/hooks/realtime/useDocumentRealtime';
+import { useDocumentChanges } from '@/hooks/realtime/useDocumentChanges';
+import { CollaborationWrapper, ActiveUsersIndicator } from '@/components/collaboration/index';
 import { CreatePageModal } from '@/components/document/CreatePageModal';
 import { createDocumentInFirestore, getDocumentsForOrganization, updateDocumentInFirestore, getDocumentById, deleteDocumentAndChildren } from '@/lib/firebase/firestore/documents';
 import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations';
@@ -29,6 +33,8 @@ import type { Organization } from '@/types/organization';
 import { buildDocumentTree, findDocumentInList } from '@/config/docs';
 import { Loader2, Edit3, Save, BookOpen, PlusCircle, XCircle, Home, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { useSafeNavigation } from '@/hooks/useSafeNavigation';
+import { usePageChanged } from '@/hooks/usePageChanged';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
@@ -117,16 +123,21 @@ const WikiSidebarContent = ({
 };
 
 
-function OrganizationWikiPageComponent({ params }: { params: { organizationId: string; pageId?: string[] } }) {
+function OrganizationWikiPageComponent() {
   const { currentUser, loading: authLoading, selectActiveOrganization } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
 
-  const { organizationId } = params;
-  const currentPageIdFromSlug = params.pageId?.[0];
+  // Usar useParams() en lugar de recibir params como props
+  const params = useParams();
+  const organizationId = params.organizationId as string;
+  const pageId = params.pageId as string[] | undefined;
+  const currentPageIdFromSlug = pageId?.[0];
   const searchParams = useSearchParams();
   const editModeQuery = searchParams.get('edit') === 'true';
 
+  // Usar el hook de tiempo real para el documento actual
+  const { document: currentDocumentRealtime, loading: isLoadingDocumentRealtime } = useDocumentRealtime(currentPageIdFromSlug || null);
   const [currentDocument, setCurrentDocument] = useState<DocumentNode | null>(null);
   const [allDocumentsFlat, setAllDocumentsFlat] = useState<DocumentNode[]>([]);
   const [documentTree, setDocumentTree] = useState<DocumentNode[]>([]);
@@ -136,6 +147,27 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [isFetchingOrg, setIsFetchingOrg] = useState(true);
   const [isFetchingDocs, setIsFetchingDocs] = useState(true); // For document list fetching state
+  
+  // Evitar múltiples actualizaciones de estado usando memoización
+  const handleDocumentChange = useCallback((updatedContent: string, updatedAt: Date) => {
+    // Si estamos editando, el componente CollaborationWrapper manejará los conflictos
+    if (!isEditing) {
+      // Si no estamos en modo edición, actualizar silenciosamente
+      setCurrentDocument(prev => prev ? { ...prev, content: updatedContent, updatedAt } : null);
+    }
+  }, [isEditing]);
+  
+  // Detectar cambios en el documento para colaboración en tiempo real
+  // Solo activar cuando realmente necesitamos seguir cambios
+  const shouldWatchChanges = currentPageIdFromSlug && !isLoadingDocumentRealtime;
+  
+  useDocumentChanges({
+    documentId: shouldWatchChanges ? currentPageIdFromSlug : null,
+    isEditing,
+    localContent: editedContent,
+    onContentChanged: handleDocumentChange,
+    skipInitial: true
+  });
 
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [pageToDelete, setPageToDelete] = useState<DocumentNode | null>(null);
@@ -156,11 +188,20 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   }, [expandedItems, wikiTreeStorageKey]);
 
   useEffect(() => {
-    setIsEditing(editModeQuery);
-     if (!editModeQuery && currentDocument) {
-        setEditedContent(currentDocument.content || '');
+    // Solo cambiar isEditing si realmente cambió el valor de la consulta
+    const shouldBeEditing = editModeQuery === true;
+    if (isEditing !== shouldBeEditing) {
+      console.log(`Cambiando modo de edición: ${isEditing} -> ${shouldBeEditing}`);
+      setIsEditing(shouldBeEditing);
     }
-  }, [editModeQuery, currentDocument]);
+     
+    // Solo actualizar el contenido editado cuando cambiamos de documento 
+    // o cuando salimos del modo edición
+    if (!shouldBeEditing && currentDocument && editedContent !== currentDocument.content) {
+      console.log('Actualizando contenido editado desde documento actual');
+      setEditedContent(currentDocument.content || '');
+    }
+  }, [editModeQuery, currentDocument, isEditing, editedContent]);
 
 
   const fetchOrganizationDetails = useCallback(async () => {
@@ -223,20 +264,44 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
     }
   }, [organization, currentUser, organizationId, fetchDocuments]);
 
-  // Effect to set the current document for display and manage content loading state
-  useEffect(() => {
+  // Detectar cuando cambia la página actual sin reaccionar a otros cambios de estado
+  usePageChanged(currentPageIdFromSlug, () => {
+    // Cada vez que cambie el ID de página, iniciar carga
     setIsLoadingContent(true);
-    if (currentPageIdFromSlug && allDocumentsFlat.length > 0) {
+  });
+  
+  // Effect to set the current document for display and manage content loading state
+  // Efecto para actualizar el documento actual, priorizando la versión en tiempo real
+  useEffect(() => {
+    // Si tenemos la versión en tiempo real, usarla
+    if (currentDocumentRealtime) {
+      setCurrentDocument(currentDocumentRealtime);
+      setEditedContent(currentDocumentRealtime.content || '');
+      setIsLoadingContent(false);
+    } 
+    // Si no hay versión en tiempo real pero tenemos el ID y la lista plana, buscar ahí
+    else if (!isLoadingDocumentRealtime && currentPageIdFromSlug && allDocumentsFlat.length > 0) {
       const doc = findDocumentInList(allDocumentsFlat, currentPageIdFromSlug);
       setCurrentDocument(doc);
       setEditedContent(doc?.content || '');
-    } else if (!currentPageIdFromSlug) { // Wiki home
+      setIsLoadingContent(false);
+    } 
+    // Si no hay ID (Wiki home)
+    else if (!currentPageIdFromSlug) {
       setCurrentDocument(null);
       setEditedContent('');
+      setIsLoadingContent(false);
     }
-    // If doc not found with currentPageIdFromSlug but slug exists, currentDocument will be null (handled by UI)
-    setIsLoadingContent(false);
-  }, [currentPageIdFromSlug, allDocumentsFlat]);
+    // Si todavía estamos cargando el documento en tiempo real, mantener el estado de carga
+    else if (isLoadingDocumentRealtime) {
+      // Estado de carga manejado por isLoadingContent=true
+    } 
+    // Si no hay documento en la lista plana, mostrar estado de no encontrado
+    else {
+      setCurrentDocument(null);
+      setIsLoadingContent(false);
+    }
+  }, [currentPageIdFromSlug, allDocumentsFlat, currentDocumentRealtime, isLoadingDocumentRealtime]);
 
 
   // Auto-expand parent logic
@@ -267,15 +332,22 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
   }, [currentPageIdFromSlug, allDocumentsFlat]);
 
 
+  // Determinar si hay cambios sin guardar
+  const hasUnsavedChanges = isEditing && currentDocument && editedContent !== (currentDocument.content || '');
+  
+  // Usar el hook de navegación segura
+  const { navigateTo } = useSafeNavigation({
+    hasUnsavedChanges,
+    confirmationMessage: "Tienes cambios sin guardar. ¿Estás seguro de que quieres salir? Tus cambios se perderán."
+  });
+  
   const handleSelectDocument = (id: string) => {
     const targetPath = `/organization/${organizationId}/wiki/${id}`;
-    if (isEditing && currentDocument && editedContent !== (currentDocument.content || '')) {
-        if (confirm("You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.")) {
-            router.push(isEditing ? `${targetPath}?edit=true` : targetPath);
-        }
-    } else {
-         router.push(isEditing && id !== currentPageIdFromSlug ? `${targetPath}?edit=true` : targetPath);
-    }
+    const fullPath = isEditing && id !== currentPageIdFromSlug ? `${targetPath}?edit=true` : targetPath;
+    
+    // Asegurarnos de usar navegación del lado cliente (shallow) para evitar recargas completas
+    console.log(`Navegando a: ${fullPath} (shallow: true)`);
+    navigateTo(fullPath, { shallow: true });
   };
 
   const handlePageCreated = async (newPageId?: string) => {
@@ -319,21 +391,31 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
 
   const toggleEditMode = () => {
     if (!currentDocument && !isEditing) {
-      toast({title: "Cannot Edit", description: "Please select a page to edit.", variant: "default"});
+      toast({title: "No se puede editar", description: "Por favor selecciona una página para editar.", variant: "default"});
       return;
     }
+    
     const basePath = `/organization/${organizationId}/wiki/${currentDocument?.id || ''}`;
+    
     if (isEditing) {
-        if (currentDocument && editedContent !== (currentDocument.content || '')) {
-             if (confirm("You have unsaved changes. Are you sure you want to cancel editing? Your changes will be lost.")) {
-                setEditedContent(currentDocument.content || '');
-                router.push(basePath);
-            }
-        } else {
-            router.push(basePath);
+      // Saliendo del modo edición - verificar cambios sin guardar
+      if (hasUnsavedChanges) {
+        if (confirm("Tienes cambios sin guardar. ¿Estás seguro de que quieres cancelar la edición? Tus cambios se perderán.")) {
+          // Actualizar primero el contenido local para evitar conflictos
+          setEditedContent(currentDocument?.content || '');
+          // Usar navegación segura con shallow routing
+          console.log(`Saliendo del modo edición con cambios descartados: ${basePath}`);
+          navigateTo(basePath, { shallow: true });
         }
+      } else {
+        // No hay cambios sin guardar, salir directamente
+        console.log(`Saliendo del modo edición sin cambios: ${basePath}`);
+        navigateTo(basePath, { shallow: true });
+      }
     } else {
-        router.push(`${basePath}?edit=true`);
+      // Entrando al modo edición
+      console.log(`Entrando al modo edición: ${basePath}?edit=true`);
+      navigateTo(`${basePath}?edit=true`, { shallow: true });
     }
   };
 
@@ -419,23 +501,55 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
               {!currentPageIdFromSlug && !isLoadingContent && !isFetchingDocs && organization && (
                 <Card className="mt-4 shadow-lg">
                   <CardHeader>
-                    <CardTitle className="text-2xl flex items-center"><Home className="mr-2 h-6 w-6 text-primary" /> Wiki Home</CardTitle>
-                    <CardDescription>Welcome to the wiki for {organization.name}. Select a page from the sidebar or create a new one.</CardDescription>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-2xl flex items-center">
+                        <Home className="mr-2 h-6 w-6 text-primary" /> Wiki Home
+                      </CardTitle>
+                      {/* Mostrar usuarios activos en la organización */}
+                      <div>
+                        {currentUser && (
+                          <ActiveUsersIndicator 
+                            documentId={organizationId} 
+                            currentUserId={currentUser.uid}
+                            showCount={true}
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <CardDescription>Bienvenido a la wiki de {organization.name}. Selecciona una página desde el menú lateral o crea una nueva.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <p>Use the sidebar to navigate through existing pages or click the &quot;Create Page&quot; button to start a new document.</p>
-                     {canEdit && (
-                      <Button
-                        onClick={toggleEditMode}
-                        variant="outline"
-                        size="sm"
-                        className="mt-4"
-                        disabled={!currentDocument}
-                      >
+                    <p>Usa el menú lateral para navegar entre páginas existentes o haz clic en el botón &quot;Create Page&quot; para comenzar un nuevo documento.</p>
+                    <div className="mt-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                      {canEdit && (
+                        <Button
+                          onClick={toggleEditMode}
+                          variant="outline"
+                          size="sm"
+                          disabled={!currentDocument}
+                        >
                           <Edit3 className="mr-2 h-4 w-4" />
-                          {currentDocument ? "Edit Selected Page" : "Select a page to edit"}
-                      </Button>
-                    )}
+                          {currentDocument ? "Editar página seleccionada" : "Selecciona una página para editar"}
+                        </Button>
+                      )}
+                      
+                      <div className="flex items-center text-sm text-muted-foreground">
+                        <p className="italic">
+                          Última actualización de la wiki: {allDocumentsFlat.length > 0 
+                            ? (() => {
+                                // Filtramos documentos con fecha válida y obtenemos el más reciente
+                                const validDocs = allDocumentsFlat
+                                  .filter(d => d.updatedAt && !isNaN(d.updatedAt.getTime()))
+                                  .map(d => d.updatedAt!.getTime());
+                                
+                                return validDocs.length > 0
+                                  ? new Date(Math.max(...validDocs)).toLocaleString()
+                                  : 'Fecha desconocida';
+                              })()
+                            : 'No hay documentos aún'}
+                        </p>
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
               )}
@@ -476,22 +590,35 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
                     </div>
                   </div>
 
-                  {isEditing && canEdit ? (
-                    <WysiwygEditor
-                      initialContent={editedContent}
-                      onContentChange={setEditedContent}
-                    />
-                  ) : (
-                    <article className="prose dark:prose-invert max-w-none bg-card p-4 sm:p-6 rounded-md shadow">
-                      {currentDocument.content ? (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {currentDocument.content}
-                        </ReactMarkdown>
-                      ) : (
-                        <p className="text-muted-foreground">This page is empty. {canEdit ? 'Click "Edit Page" to add content.' : ''}</p>
-                      )}
-                    </article>
-                  )}
+                  <CollaborationWrapper
+                    documentId={currentDocument.id}
+                    organizationId={organizationId}
+                    isEditing={isEditing}
+                    documentName={currentDocument.name}
+                    localContent={editedContent}
+                    onEditBlocked={() => router.push(`/organization/${organizationId}/wiki/${currentDocument.id}`)}
+                    onResolveConflict={(resolvedContent) => {
+                      setEditedContent(resolvedContent);
+                      toast({ title: 'Conflicto resuelto', description: 'El documento ha sido actualizado con la versión reconciliada.' });
+                    }}
+                  >
+                    {isEditing && canEdit ? (
+                      <WysiwygEditor
+                        initialContent={editedContent}
+                        onContentChange={setEditedContent}
+                      />
+                    ) : (
+                      <article className="prose dark:prose-invert max-w-none bg-card p-4 sm:p-6 rounded-md shadow">
+                        {currentDocument.content ? (
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {currentDocument.content}
+                          </ReactMarkdown>
+                        ) : (
+                          <p className="text-muted-foreground">This page is empty. {canEdit ? 'Click "Edit Page" to add content.' : ''}</p>
+                        )}
+                      </article>
+                    )}
+                  </CollaborationWrapper>
                 </>
               )}
 
@@ -541,10 +668,6 @@ function OrganizationWikiPageComponent({ params }: { params: { organizationId: s
 }
 
 
-export default function OrganizationWikiPageWrapper({ params }: { params: { organizationId: string; pageId?: string[] } }) {
-  return (
-    <Suspense fallback={<div className="flex h-full w-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading Wiki UI...</div>}>
-      <OrganizationWikiPageComponent params={params} />
-    </Suspense>
-  )
+export default function OrganizationWikiPageWrapper() {
+  return <OrganizationWikiPageComponent />;
 }

@@ -16,12 +16,32 @@ const nextConfig: NextConfig = {
         port: '',
         pathname: '/**',
       },
+      {
+        protocol: 'https',
+        hostname: 'lh3.googleusercontent.com', // Para fotos de perfil de Google
+        port: '',
+        pathname: '/**',
+      },
     ],
   },
   experimental: {
     serverActions: {
-      bodySizeLimit: '2mb', // Or your preferred limit
+      bodySizeLimit: '2mb', // O tu límite preferido
     },
+  },
+  // Optimizaciones para carga de página
+  reactStrictMode: true,
+  swcMinify: true, // Minimización SWC para mejor rendimiento
+  poweredByHeader: false, // Eliminar cabecera X-Powered-By por seguridad
+  // Configuración de rutas
+  async redirects() {
+    return [
+      {
+        source: '/organization/:organizationId',
+        destination: '/organization/:organizationId/wiki',
+        permanent: true,
+      },
+    ];
   },
 };
 
