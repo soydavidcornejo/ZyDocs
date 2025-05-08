@@ -1,3 +1,4 @@
+
 "use client"
 
 import * as React from "react"
@@ -134,7 +135,7 @@ const SidebarProvider = React.forwardRef<
             // group/sidebar-wrapper ensures children can style based on sidebar state.
             // has-[[data-variant=inset]]:bg-sidebar - applies bg if inset variant is used
             className={cn(
-              "group/sidebar-wrapper flex w-full h-full has-[[data-variant=inset]]:bg-sidebar", 
+              "group/sidebar-wrapper flex w-full h-full has-[[data-variant=inset]]:bg-sidebar",
               className
             )}
             ref={ref}
@@ -174,7 +175,7 @@ const Sidebar = React.forwardRef<
       return (
         <div
           className={cn(
-            "flex h-full w-[--sidebar-width] flex-col bg-sidebar text-sidebar-foreground",
+            "flex h-full w-[--sidebar-width] flex-col bg-sidebar text-sidebar-foreground z-30", // Added z-30
             className
           )}
           ref={ref}
@@ -191,7 +192,7 @@ const Sidebar = React.forwardRef<
           <SheetContent
             data-sidebar="sidebar"
             data-mobile="true"
-            className="w-[--sidebar-width] bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden" // Assuming sidebar width is defined via CSS var
+            className="w-[--sidebar-width] bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden z-30" // Added z-30
             style={
               {
                 "--sidebar-width": SIDEBAR_WIDTH_MOBILE, // Mobile specific width
@@ -209,7 +210,7 @@ const Sidebar = React.forwardRef<
       <div
         ref={ref}
         className={cn(
-            "group peer hidden md:block text-sidebar-foreground relative h-full", // Use relative and h-full
+            "group peer hidden md:block text-sidebar-foreground relative h-full z-30", // Added z-30
             // Collapsed state styling for icon-only sidebar
             state === "collapsed" && collapsible === "icon" ? "w-[--sidebar-width-icon]" : "w-[--sidebar-width]",
             // Offcanvas specific styling
@@ -356,7 +357,7 @@ const SidebarHeader = React.forwardRef<
       ref={ref}
       data-sidebar="header"
       // Removed sticky and top-0 as the parent Sidebar is now handling fixed positioning
-      className={cn("flex flex-col gap-2 p-2", className)} 
+      className={cn("flex flex-col gap-2 p-2", className)}
       {...props}
     />
   )

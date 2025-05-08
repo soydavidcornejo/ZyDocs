@@ -15,7 +15,11 @@ import { NotificationItem } from './NotificationItem';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export function NotificationBell() {
-  const { pendingInvitations, loading: authLoading } = useAuth();
+  const { currentUser, pendingInvitations, loading: authLoading } = useAuth();
+
+  if (!currentUser) {
+    return null; // Do not render if user is not logged in
+  }
 
   if (authLoading && !pendingInvitations?.length) {
     return (
