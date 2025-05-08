@@ -42,6 +42,24 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
   const parentPageOptions = allDocuments
     .filter(doc => doc.type === 'page') // Ensure only pages can be parents
     .sort((a, b) => a.name.localeCompare(b.name));
+    
+  // Función para construir la ruta completa de un documento
+  const getDocumentPath = (docId: string): string => {
+    const paths: string[] = [];
+    let currentDocId = docId;
+    let loopGuard = 0; // Prevenir bucles infinitos
+    
+    while (currentDocId && loopGuard < 10) {
+      const doc = allDocuments.find(d => d.id === currentDocId);
+      if (!doc) break;
+      
+      paths.unshift(doc.name);
+      currentDocId = doc.parentId || '';
+      loopGuard++;
+    }
+    
+    return `"/${paths.join('/')}"`;  // Cambiado para usar el formato solicitado
+  };
 
 
   useEffect(() => {
@@ -127,7 +145,9 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
                   </SelectItem>
                   {parentPageOptions.map((doc) => (
                     <SelectItem key={doc.id} value={doc.id}>
-                      {doc.name} {/* Display indentation or path if needed for clarity */}
+                      <span className="text-muted-foreground font-mono text-xs whitespace-nowrap overflow-hidden text-ellipsis">
+                        {getDocumentPath(doc.id)}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>

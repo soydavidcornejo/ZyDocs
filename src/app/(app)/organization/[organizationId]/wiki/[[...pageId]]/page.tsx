@@ -1,8 +1,8 @@
-// src/app/(app)/organization/[organizationId]/wiki/[[...pageId]]/page.tsx
 'use client';
 
+
 import type React from 'react';
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
@@ -28,10 +28,11 @@ import { CollaborationWrapper, ActiveUsersIndicator } from '@/components/collabo
 import { CreatePageModal } from '@/components/document/CreatePageModal';
 import { createDocumentInFirestore, getDocumentsForOrganization, updateDocumentInFirestore, getDocumentById, deleteDocumentAndChildren } from '@/lib/firebase/firestore/documents';
 import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations';
+import { watchLockStatus } from '@/lib/firebase/firestore/documentLocks';
 import type { DocumentNode } from '@/types/document';
 import type { Organization } from '@/types/organization';
 import { buildDocumentTree, findDocumentInList } from '@/config/docs';
-import { Loader2, Edit3, Save, BookOpen, PlusCircle, XCircle, Home, Trash2 } from 'lucide-react';
+import { Loader2, Edit3, Save, BookOpen, PlusCircle, XCircle, Home, Trash2, FileText } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useSafeNavigation } from '@/hooks/useSafeNavigation';
 import { usePageChanged } from '@/hooks/usePageChanged';
@@ -136,6 +137,9 @@ function OrganizationWikiPageComponent() {
   const searchParams = useSearchParams();
   const editModeQuery = searchParams.get('edit') === 'true';
 
+  // Para optimizar la experiencia, pre-cargamos documentos con frecuencia
+  const preloadCache = useRef<Record<string, DocumentNode>>({});
+
   // Usar el hook de tiempo real para el documento actual
   const { document: currentDocumentRealtime, loading: isLoadingDocumentRealtime } = useDocumentRealtime(currentPageIdFromSlug || null);
   const [currentDocument, setCurrentDocument] = useState<DocumentNode | null>(null);
@@ -171,6 +175,8 @@ function OrganizationWikiPageComponent() {
 
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [pageToDelete, setPageToDelete] = useState<DocumentNode | null>(null);
+  const [documentLocked, setDocumentLocked] = useState<boolean>(false);
+  const [lockOwner, setLockOwner] = useState<string>('');
 
   const wikiTreeStorageKey = useMemo(() => `${WIKI_TREE_STATE_KEY_PREFIX}${organizationId}`, [organizationId]);
   const [expandedItems, setExpandedItems] = useState<string[]>(() => {
@@ -180,6 +186,81 @@ function OrganizationWikiPageComponent() {
     }
     return [];
   });
+
+  // Función para precargar documentos en segundo plano
+  const preloadDocument = useCallback(async (docId: string) => {
+    if (!docId || preloadCache.current[docId]) return;
+    
+    try {
+      // Primero verificamos si ya está en la lista plana
+      const docFromList = findDocumentInList(allDocumentsFlat, docId);
+      if (docFromList) {
+        preloadCache.current[docId] = docFromList;
+        return;
+      }
+      
+      // Si no está en la lista, lo cargamos directamente
+      const doc = await getDocumentById(docId);
+      if (doc) {
+        preloadCache.current[docId] = doc;
+      }
+    } catch (err) {
+      console.error("Error precargando documento:", err);
+    }
+  }, [allDocumentsFlat]);
+
+  // Optimizar la navegación a través del árbol
+  const optimizeNavigation = useCallback(() => {
+    if (documentTree.length > 0 && allDocumentsFlat.length > 0) {
+      // Precargar los primeros N documentos del árbol en segundo plano
+      const preloadInitialDocs = async () => {
+        const rootDocs = allDocumentsFlat.filter(d => !d.parentId).slice(0, 3);
+        for (const doc of rootDocs) {
+          preloadDocument(doc.id);
+        }
+      };
+      
+      preloadInitialDocs();
+    }
+  }, [documentTree, allDocumentsFlat, preloadDocument]);
+
+  // Precargamos documentos relacionados cuando cambia la página actual
+  useEffect(() => {
+    if (!currentDocument || !currentPageIdFromSlug) return;
+    
+    // Precargar documentos relacionados (padres, hermanos, hijos)
+    const preloadRelatedDocs = async () => {
+      // Padres
+      if (currentDocument.parentId) {
+        preloadDocument(currentDocument.parentId);
+      }
+      
+      // Hermanos y primos
+      const siblings = allDocumentsFlat.filter(d => 
+        d.parentId === currentDocument.parentId && d.id !== currentDocument.id
+      ).slice(0, 5); // Limitamos a 5 para no sobrecargar
+      
+      for (const sibling of siblings) {
+        preloadDocument(sibling.id);
+      }
+      
+      // Hijos
+      const children = allDocumentsFlat.filter(d => 
+        d.parentId === currentDocument.id
+      ).slice(0, 5);
+      
+      for (const child of children) {
+        preloadDocument(child.id);
+      }
+    };
+    
+    preloadRelatedDocs();
+  }, [currentDocument, currentPageIdFromSlug, preloadDocument, allDocumentsFlat]);
+
+  // Ejecutar optimizaciones cuando cambie el árbol de documentos
+  useEffect(() => {
+    optimizeNavigation();
+  }, [optimizeNavigation]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -266,13 +347,19 @@ function OrganizationWikiPageComponent() {
 
   // Detectar cuando cambia la página actual sin reaccionar a otros cambios de estado
   usePageChanged(currentPageIdFromSlug, () => {
-    // Cada vez que cambie el ID de página, iniciar carga
-    setIsLoadingContent(true);
+    // Cada vez que cambie el ID de página, iniciar carga solo del contenido
+    // NO establecer isLoadingContent=true aquí, para evitar parpadeos durante la navegación
+    console.log(`Cambiando a página: ${currentPageIdFromSlug}`);
   });
   
   // Effect to set the current document for display and manage content loading state
   // Efecto para actualizar el documento actual, priorizando la versión en tiempo real
   useEffect(() => {
+    // Si estamos cambiando de página, iniciar carga solo del contenido
+    if (currentPageIdFromSlug && !isLoadingDocumentRealtime) {
+      setIsLoadingContent(true);
+    }
+    
     // Si tenemos la versión en tiempo real, usarla
     if (currentDocumentRealtime) {
       setCurrentDocument(currentDocumentRealtime);
@@ -332,6 +419,27 @@ function OrganizationWikiPageComponent() {
   }, [currentPageIdFromSlug, allDocumentsFlat]);
 
 
+  // Verificar si el documento está bloqueado para edición
+  useEffect(() => {
+    if (!currentDocument || !currentUser) return;
+    
+    console.log("Verificando estado de bloqueo para", currentDocument.id);
+    
+    const unsubscribe = watchLockStatus(currentDocument.id, (lockStatus) => {
+      if (lockStatus && lockStatus.userId !== currentUser.uid) {
+        console.log(`Documento bloqueado por ${lockStatus.userName}`);
+        setDocumentLocked(true);
+        setLockOwner(lockStatus.userName);
+      } else {
+        setDocumentLocked(false);
+        setLockOwner('');
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [currentDocument, currentUser]);
+
+
   // Determinar si hay cambios sin guardar
   const hasUnsavedChanges = isEditing && currentDocument && editedContent !== (currentDocument.content || '');
   
@@ -345,9 +453,19 @@ function OrganizationWikiPageComponent() {
     const targetPath = `/organization/${organizationId}/wiki/${id}`;
     const fullPath = isEditing && id !== currentPageIdFromSlug ? `${targetPath}?edit=true` : targetPath;
     
+    // Mostrar skeleton loader sin ocultar la barra lateral
+    if (id !== currentPageIdFromSlug) {
+      setIsLoadingContent(true);
+    }
+    
     // Asegurarnos de usar navegación del lado cliente (shallow) para evitar recargas completas
-    console.log(`Navegando a: ${fullPath} (shallow: true)`);
-    navigateTo(fullPath, { shallow: true });
+    console.log(`Navegando a documento: ${fullPath} (shallow: true)`);
+    
+    // Opción 1: usar router directamente para client-side navigation
+    router.push(fullPath, undefined, { shallow: true });
+    
+    // Como capa adicional de seguridad, si hay cambios no guardados, confirmar antes de navegar
+    // navigateTo(fullPath, { shallow: true });
   };
 
   const handlePageCreated = async (newPageId?: string) => {
@@ -456,8 +574,15 @@ function OrganizationWikiPageComponent() {
   };
 
 
-  if (authLoading || isFetchingOrg || (!currentUser && !authLoading)) {
+  if (authLoading || isFetchingOrg) {
     return <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading Wiki...</div>;
+  }
+
+  if (!currentUser && !authLoading) {
+    // Si el usuario no está autenticado, redireccionar al login
+    const redirectUrl = `/login?redirect=/organization/${organizationId}/wiki${currentPageIdFromSlug ? `/${currentPageIdFromSlug}` : ''}${editModeQuery ? '?edit=true' : ''}`;
+    router.push(redirectUrl);
+    return <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Redireccionando a login...</div>;
   }
 
   const canEdit = currentUser?.organizationMemberships?.find(m => m.organizationId === organizationId && (m.role === 'admin' || m.role === 'editor'));
@@ -465,7 +590,7 @@ function OrganizationWikiPageComponent() {
   if (organization && currentUser && currentUser.currentOrganizationId !== organizationId && !isFetchingOrg) {
      return (
         <div className="flex h-full w-full items-center justify-center">
-            <Loader2 className="h-8 w-8 animate-spin" /> Verifying organization context...
+            <Loader2 className="h-8 w-8 animate-spin" /> Verificando contexto de organización...
         </div>
      );
   }
@@ -473,30 +598,64 @@ function OrganizationWikiPageComponent() {
   return (
     <SidebarProvider defaultOpen>
       <div className="flex h-full bg-background">
-        <Sidebar collapsible="icon" className="border-r">
-          {organization ? ( // Sidebar content always shown if org exists, internal loader for tree
-            <WikiSidebarContent
-              organizationId={organizationId}
-              documents={documentTree}
-              flatDocuments={allDocumentsFlat}
-              currentDocumentId={currentPageIdFromSlug}
-              onSelectDocument={handleSelectDocument}
-              organizationName={organization.name || 'Wiki'}
-              expandedItems={expandedItems}
-              setExpandedItems={setExpandedItems}
-              onPageCreated={handlePageCreated}
-              isFetchingTree={isFetchingDocs && documentTree.length === 0} // Pass tree-specific loading
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center p-4">
-               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-            </div>
-          )}
-        </Sidebar>
+        {/* Envoltura para el sidebar que asegura que siempre sea visible */}
+        <div className="sticky top-0 h-full z-30 md:relative">
+          <Sidebar collapsible="icon" className="border-r z-10 h-full">
+            {organization ? (
+              <WikiSidebarContent
+                organizationId={organizationId}
+                documents={documentTree}
+                flatDocuments={allDocumentsFlat}
+                currentDocumentId={currentPageIdFromSlug}
+                onSelectDocument={handleSelectDocument}
+                organizationName={organization.name || 'Wiki'}
+                expandedItems={expandedItems}
+                setExpandedItems={setExpandedItems}
+                onPageCreated={handlePageCreated}
+                isFetchingTree={isFetchingDocs && documentTree.length === 0}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center p-4">
+                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              </div>
+            )}
+          </Sidebar>
+        </div>
+
+        {/* Contenido principal - muestra pantalla de carga condicional dentro del contenedor */}
         <SidebarInset>
-          <ScrollArea className="h-full">
-            <div className="container mx-auto p-4 md:p-6 lg:p-8">
-              {(isLoadingContent) && <div className="flex items-center justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /> <span className="ml-2">Loading page...</span></div>}
+          {/* Este contenedor de carga solo aparece cuando necesitamos mostrar que todo el sistema está cargando */}
+          {currentUser && currentUser.currentOrganizationId !== organizationId && !isFetchingOrg ? (
+            <div className="flex h-full w-full items-center justify-center">
+              <Loader2 className="h-8 w-8 animate-spin" /> Verificando contexto de organización...
+            </div>
+          ) : (
+            <ScrollArea className="h-full">
+              <div className="container mx-auto p-4 md:p-6 lg:p-8">
+                {/* Loader para solo el contenido de la página */}
+                {isLoadingContent && (
+                  <div className="w-full max-w-4xl mx-auto">
+                    {/* Skeleton loader para la página */}
+                    <div className="flex items-center mb-6 animate-pulse">
+                      <div className="h-8 w-8 rounded-full bg-primary/20 mr-3 flex items-center justify-center">
+                        <FileText className="h-4 w-4 text-primary/30" />
+                      </div>
+                      <div className="h-8 w-64 bg-primary/20 rounded-md"></div>
+                    </div>
+                    
+                    <div className="h-4 w-full max-w-md bg-primary/10 rounded-md mb-4"></div>
+                    <div className="h-4 w-full bg-primary/10 rounded-md mb-4"></div>
+                    <div className="h-4 w-full max-w-lg bg-primary/10 rounded-md mb-4"></div>
+                    <div className="h-4 w-3/4 bg-primary/10 rounded-md mb-8"></div>
+                    
+                    <div className="h-4 w-full bg-primary/10 rounded-md mb-4"></div>
+                    <div className="h-4 w-full max-w-xl bg-primary/10 rounded-md mb-4"></div>
+                    <div className="h-4 w-1/2 bg-primary/10 rounded-md mb-8"></div>
+                    
+                    <div className="h-4 w-full bg-primary/10 rounded-md mb-4"></div>
+                    <div className="h-4 w-2/3 bg-primary/10 rounded-md mb-4"></div>
+                  </div>
+                )}
 
               {!currentPageIdFromSlug && !isLoadingContent && !isFetchingDocs && organization && (
                 <Card className="mt-4 shadow-lg">
@@ -526,10 +685,13 @@ function OrganizationWikiPageComponent() {
                           onClick={toggleEditMode}
                           variant="outline"
                           size="sm"
-                          disabled={!currentDocument}
+                          disabled={!currentDocument || documentLocked}
+                          title={documentLocked ? `Este documento está siendo editado por ${lockOwner}` : 
+                                 !currentDocument ? "Selecciona una página para editar" : "Editar página seleccionada"}
                         >
                           <Edit3 className="mr-2 h-4 w-4" />
-                          {currentDocument ? "Editar página seleccionada" : "Selecciona una página para editar"}
+                          {!currentDocument ? "Selecciona una página para editar" : 
+                           documentLocked ? `Documento bloqueado por ${lockOwner}` : "Editar página seleccionada"}
                         </Button>
                       )}
                       
@@ -571,8 +733,15 @@ function OrganizationWikiPageComponent() {
                                     </Button>
                                 </>
                             ) : (
-                                <Button onClick={toggleEditMode} variant="outline" size="sm">
+                                <Button 
+                                    onClick={toggleEditMode} 
+                                    variant="outline" 
+                                    size="sm"
+                                    disabled={documentLocked} // Deshabilitar si el documento está bloqueado
+                                    title={documentLocked ? `Este documento está siendo editado por ${lockOwner}` : "Editar página"}
+                                >
                                     <Edit3 className="mr-2 h-4 w-4" /> Edit Page
+                                    {documentLocked && <span className="ml-2 text-xs text-muted-foreground">(Bloqueado)</span>}
                                 </Button>
                             )
                         )}
@@ -596,7 +765,14 @@ function OrganizationWikiPageComponent() {
                     isEditing={isEditing}
                     documentName={currentDocument.name}
                     localContent={editedContent}
-                    onEditBlocked={() => router.push(`/organization/${organizationId}/wiki/${currentDocument.id}`)}
+                    onEditBlocked={() => {
+                      // Si estamos en modo edición, redireccionar a vista de lectura
+                      if (isEditing) {
+                        console.log(`Redirección a vista de lectura por bloqueo: /organization/${organizationId}/wiki/${currentDocument.id}`);
+                        // Usar navigateTo para mantener navegación del lado cliente
+                        navigateTo(`/organization/${organizationId}/wiki/${currentDocument.id}`, { shallow: true });
+                      }
+                    }}
                     onResolveConflict={(resolvedContent) => {
                       setEditedContent(resolvedContent);
                       toast({ title: 'Conflicto resuelto', description: 'El documento ha sido actualizado con la versión reconciliada.' });
@@ -636,7 +812,8 @@ function OrganizationWikiPageComponent() {
                 </Card>
               )}
             </div>
-          </ScrollArea>
+              </ScrollArea>
+              )}
         </SidebarInset>
       </div>
       {pageToDelete && (

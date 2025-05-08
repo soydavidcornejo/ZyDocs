@@ -39,12 +39,14 @@ export function useSafeNavigation({
       ? hasUnsavedChanges() 
       : hasUnsavedChanges;
     
+    // Por defecto, usar shallow=true para evitar recargas completas
+    const shallowOption = options?.shallow !== undefined ? options.shallow : true;
+    
     if (unsavedChanges) {
       // Mostrar confirmación
       if (window.confirm(confirmationMessage)) {
-        // Por defecto, usar shallow=true para evitar recargas completas
-        const shallow = options?.shallow !== undefined ? options.shallow : true;
-        router.push(href, { shallow });
+        console.log(`Navegando a ${href} (shallow: ${shallowOption})`);
+        router.push(href, undefined, { shallow: shallowOption });
       } else {
         // El usuario canceló la navegación
         toast({
@@ -54,8 +56,8 @@ export function useSafeNavigation({
       }
     } else {
       // No hay cambios sin guardar, navegar directamente con shallow=true por defecto
-      const shallow = options?.shallow !== undefined ? options.shallow : true;
-      router.push(href, { shallow });
+      console.log(`Navegando a ${href} (shallow: ${shallowOption})`);
+      router.push(href, undefined, { shallow: shallowOption });
     }
   }, [router, hasUnsavedChanges, confirmationMessage, toast]);
   

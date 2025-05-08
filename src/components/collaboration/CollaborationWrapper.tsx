@@ -106,14 +106,16 @@ export function CollaborationWrapper({
           setHasLock(false);
           
           if (onEditBlocked) {
+            console.log("Documento bloqueado para edición, redirigiendo a modo lectura");
             onEditBlocked();
           }
           
-          toast({
+          // Eliminamos el toast que muestra la alerta
+          /* toast({
             title: 'Documento bloqueado',
             description: 'Este documento está siendo editado por otro usuario.',
             variant: 'destructive'
-          });
+          }); */
         }
       } catch (error) {
         console.error('Error adquiriendo bloqueo:', error);
@@ -204,13 +206,14 @@ export function CollaborationWrapper({
         )}
       </div>
       
-      {/* Indicador de bloqueo de edición */}
+      {/* Indicador de bloqueo de edición - solo mostrar alerta en modo edición */}
       {documentId && currentUser && (
         <EditLockIndicator 
           documentId={documentId}
           currentUserId={currentUser.uid}
           isAdmin={isAdmin}
           onForceUnlock={onEditBlocked}
+          showAlert={isEditing} // Solo mostrar alerta si estamos intentando editar
         />
       )}
       

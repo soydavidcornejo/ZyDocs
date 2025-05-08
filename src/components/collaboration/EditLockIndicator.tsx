@@ -13,13 +13,15 @@ interface EditLockIndicatorProps {
   currentUserId: string;
   onForceUnlock?: () => void;
   isAdmin?: boolean;
+  showAlert?: boolean; // Nueva prop para controlar si mostrar la alerta (por defecto false)
 }
 
 export function EditLockIndicator({ 
   documentId, 
   currentUserId,
   onForceUnlock,
-  isAdmin = false
+  isAdmin = false,
+  showAlert = false // Por defecto, no mostrar la alerta
 }: EditLockIndicatorProps) {
   const [lock, setLock] = useState<DocumentLock | null>(null);
   const { toast } = useToast();
@@ -60,6 +62,11 @@ export function EditLockIndicator({
       });
     }
   };
+
+  // Si no queremos mostrar la alerta (en modo lectura por ejemplo), no renderizamos nada
+  if (!showAlert) {
+    return null;
+  }
 
   return (
     <Alert variant="destructive" className="mb-4">
