@@ -1,6 +1,6 @@
 // src/lib/firebase/firestore/documents.ts
 import { db } from '@/lib/firebase/config';
-import { collection, addDoc, serverTimestamp, Timestamp, getDocs, query, where, orderBy, doc, updateDoc as updateFirestoreDoc, getDoc as getFirestoreDoc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, Timestamp, getDocs, query, where, orderBy, doc, updateDoc as updateFirestoreDoc, getDoc as getFirestoreDoc, deleteDoc } from 'firebase/firestore';
 import type { DocumentNode } from '@/types/document';
 
 /**
@@ -52,18 +52,18 @@ export const createDocumentInFirestore = async (
 
 
 /**
- * Fetches all documents (pages) for a given organization, ordered for tree building.
+ * Fetches all documents (pages) for a given organization.
+ * The client-side buildDocumentTree function will handle sorting and tree construction.
  * @param organizationId The ID of the organization.
  * @returns A promise that resolves to an array of DocumentNode.
  */
 export const getDocumentsForOrganization = async (organizationId: string): Promise<DocumentNode[]> => {
   const docsCollection = collection(db, 'documents');
+  // Simplified query: only filter by organizationId.
+  // Sorting by parentId, order, and name will be handled by buildDocumentTree client-side.
   const q = query(
     docsCollection,
-    where("organizationId", "==", organizationId),
-    orderBy("parentId"), 
-    orderBy("order", "asc"),
-    orderBy("name", "asc")
+    where("organizationId", "==", organizationId)
   );
   const snapshot = await getDocs(q);
   return snapshot.docs.map(docData => {
@@ -139,3 +139,49 @@ export const getDocumentById = async (documentId: string): Promise<DocumentNode 
     throw new Error('Failed to fetch document.');
   }
 };
+
+
+/**
+ * Deletes a document and all its child documents recursively from Firestore.
+ * @param documentId - The ID of the document to delete.
+ * @param organizationId - The ID of the organization to scope the deletion.
+ */
+export const deleteDocumentAndChildren = async (documentId: string, organizationId: string): Promise<void> => {
+  try {
+    const batch = writeBatch(db);
+
+    // Helper function to find all descendants
+    const findAllDescendants = async (parentId: string): Promise<string[]> => {
+      const childrenQuery = query(
+        collection(db, 'documents'),
+        where('organizationId', '==', organizationId),
+        where('parentId', '==', parentId)
+      );
+      const childrenSnapshot = await getDocs(childrenQuery);
+      let descendants: string[] = [];
+      for (const childDoc of childrenSnapshot.docs) {
+        descendants.push(childDoc.id);
+        const subDescendants = await findAllDescendants(childDoc.id);
+        descendants = descendants.concat(subDescendants);
+      }
+      return descendants;
+    };
+
+    // Find all children and sub-children
+    const descendantIds = await findAllDescendants(documentId);
+
+    // Add main document to deletion batch
+    batch.delete(doc(db, 'documents', documentId));
+
+    // Add all descendant documents to deletion batch
+    descendantIds.forEach(id => {
+      batch.delete(doc(db, 'documents', id));
+    });
+
+    await batch.commit();
+  } catch (error) {
+    console.error(`Error deleting document ${documentId} and its children:`, error);
+    throw new Error('Failed to delete document and its children.');
+  }
+};
+
