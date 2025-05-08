@@ -95,7 +95,7 @@ function InviteUserPageContent() {
 
     setIsSubmitting(true);
     try {
-      await createInvitationInFirestore(
+      const invitationId = await createInvitationInFirestore(
         targetOrganizationId,
         email.trim(),
         role,
@@ -103,6 +103,7 @@ function InviteUserPageContent() {
         currentUser.email || undefined, 
         targetOrganizationName || undefined 
       );
+      console.log(`Invitation created successfully with ID: ${invitationId}. Please ensure Firestore indexes are set up for pending invitation queries as detailed in src/lib/firebase/firestore/invitations.ts.`);
       toast({
         title: 'Invitation Sent',
         description: `An invitation has been sent to ${email.trim()} to join "${targetOrganizationName || 'the organization'}" as a ${role}.`,
@@ -240,3 +241,4 @@ export default function InviteUserPage() {
     </Suspense>
   );
 }
+
