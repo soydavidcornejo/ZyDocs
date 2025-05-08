@@ -9,7 +9,7 @@ import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { useEffect, useState, useCallback } from 'react';
 import type { Organization, OrganizationMemberWithDetails, Invitation } from '@/types/organization';
-import { getOrganizationDetails } from '@/lib/firebase/firestore/organizations';
+import { getOrganizationDetails, deleteOrganizationAndAssociatedData } from '@/lib/firebase/firestore/organizations';
 import { getOrganizationMembersWithDetails, updateOrganizationMemberRole, removeOrganizationMember } from '@/lib/firebase/firestore/organizationMembers';
 import { getPendingInvitationsForOrganization, cancelInvitationInFirestore, createInvitationInFirestore } from '@/lib/firebase/firestore/invitations';
 import { useToast } from '@/hooks/use-toast';
@@ -33,7 +33,7 @@ export default function OrganizationSettingsPage() {
   const [members, setMembers] = useState<OrganizationMemberWithDetails[]>([]);
   const [pendingInvitations, setPendingInvitations] = useState<Invitation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [processingAction, setProcessingAction] = useState<string | null>(null); // e.g., "cancel-invite-id" or "remove-member-id"
+  const [processingAction, setProcessingAction] = useState<string | null>(null); 
 
   const fetchData = useCallback(async () => {
     if (!organizationId || !currentUser) return;
@@ -46,6 +46,12 @@ export default function OrganizationSettingsPage() {
           ? getPendingInvitationsForOrganization(organizationId) 
           : Promise.resolve([]),
       ]);
+
+      if (!orgDetails) {
+        toast({ title: "Organization Not Found", description: "The organization may have been deleted or you no longer have access.", variant: "destructive" });
+        router.push('/organizations');
+        return;
+      }
       setOrganization(orgDetails);
       setMembers(orgMembers);
       setPendingInvitations(orgInvites);
@@ -55,7 +61,7 @@ export default function OrganizationSettingsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [organizationId, currentUser, toast]);
+  }, [organizationId, currentUser, toast, router]);
 
   useEffect(() => {
     if (currentUser && organizationId) {
@@ -69,7 +75,7 @@ export default function OrganizationSettingsPage() {
   }, [currentUser, organizationId, fetchData, router, toast]);
 
   const handleRoleChange = async (memberCompositeId: string, newRole: UserRole) => {
-     const memberUserId = memberCompositeId.split('_')[1]; // Extract userId from compositeId
+     const memberUserId = memberCompositeId.split('_')[1]; 
     if (!currentUser || currentUser.currentOrganizationRole !== 'admin' || currentUser.uid === memberUserId) { 
         toast({ title: "Permission Denied", description: "You cannot change your own role or you lack permissions.", variant: "destructive" });
         return;
@@ -84,7 +90,7 @@ export default function OrganizationSettingsPage() {
     try {
       await updateOrganizationMemberRole(memberCompositeId, newRole); 
       toast({ title: 'Role Updated', description: `Member's role has been changed to ${newRole}.` });
-      fetchData(); 
+      await fetchData(); 
     } catch (error) {
       console.error('Error updating role:', error);
       toast({ title: 'Error', description: 'Could not update member role.', variant: 'destructive' });
@@ -109,8 +115,8 @@ export default function OrganizationSettingsPage() {
     try {
       await removeOrganizationMember(memberCompositeId);
       toast({ title: 'Member Removed', description: `${memberName || 'The member'} has been removed from the organization.` });
-      fetchData(); 
-       if (memberUserId === currentUser?.uid) { 
+      await fetchData(); 
+       if (memberUserId === currentUser?.uid) { // Should not happen due to initial check, but for safety
         await refreshUserProfile(); 
         router.push('/organizations');
       }
@@ -127,7 +133,7 @@ export default function OrganizationSettingsPage() {
     try {
       await cancelInvitationInFirestore(invitationId);
       toast({ title: 'Invitation Cancelled', description: `Invitation for ${inviteeEmail} has been cancelled.` });
-      fetchData(); 
+      await fetchData(); 
     } catch (error) {
       console.error('Error cancelling invitation:', error);
       toast({ title: 'Error', description: 'Could not cancel invitation.', variant: 'destructive' });
@@ -151,7 +157,7 @@ export default function OrganizationSettingsPage() {
         organization?.name
       );
       toast({ title: 'Invitation Resent', description: `A new invitation has been sent to ${invitation.invitedUserEmail}.` });
-      fetchData(); 
+      await fetchData(); 
     } catch (error) {
       console.error('Error resending invitation:', error);
       toast({ title: 'Error Resending', description: (error as Error).message || 'Could not resend invitation.', variant: 'destructive' });
@@ -160,10 +166,30 @@ export default function OrganizationSettingsPage() {
     }
   };
 
+  const handleDeleteOrganization = async () => {
+    if (!organization || !currentUser || currentUser.uid !== organization.ownerUid) {
+        toast({ title: "Permission Denied", description: "Only the organization owner can delete it.", variant: "destructive" });
+        return;
+    }
+    setProcessingAction(`delete-org-${organization.id}`);
+    try {
+        await deleteOrganizationAndAssociatedData(organization.id);
+        toast({ title: "Organization Deleted", description: `"${organization.name}" and all its data have been deleted.`});
+        await refreshUserProfile(); // Refresh to update org memberships and active org
+        router.push('/organizations'); // Navigate away
+    } catch (error) {
+        console.error("Error deleting organization:", error);
+        toast({ title: "Deletion Failed", description: (error as Error).message || "Could not delete the organization.", variant: "destructive" });
+    } finally {
+        setProcessingAction(null);
+    }
+  };
+
 
   const canManageMembers = currentUser?.currentOrganizationId === organizationId && 
                            (currentUser?.currentOrganizationRole === 'admin' || currentUser?.currentOrganizationRole === 'editor');
   const isAdmin = currentUser?.currentOrganizationRole === 'admin';
+  const isOwner = currentUser?.uid === organization?.ownerUid;
 
 
   if (authLoading || isLoading) {
@@ -183,7 +209,6 @@ export default function OrganizationSettingsPage() {
     );
   }
   
-  // This check is now also handled by useEffect, but kept for safety
   if (currentUser?.currentOrganizationId !== organizationId) {
      return (
       <div className="container mx-auto py-12 px-4 text-center">
@@ -411,8 +436,8 @@ export default function OrganizationSettingsPage() {
         </Card>
       )}
 
-      {/* Danger Zone - Placeholder */}
-      {isAdmin && (
+      {/* Danger Zone - Delete Organization */}
+      {isOwner && ( // Only the owner can delete the organization
         <Card className="shadow-lg border-destructive">
           <CardHeader>
              <div className="flex items-center space-x-3">
@@ -421,13 +446,36 @@ export default function OrganizationSettingsPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground mb-2">
-              These actions are critical and may have irreversible consequences.
+            <p className="text-sm text-muted-foreground mb-4">
+              Deleting this organization is irreversible and will remove all associated data including documents and members.
             </p>
-            {/* Example: Delete Organization Button (placeholder) */}
-            <Button variant="destructive" disabled>
-              <Trash2 className="mr-2 h-4 w-4" /> Delete Organization
-            </Button>
+            <AlertDialog>
+                <AlertDialogTrigger asChild>
+                    <Button variant="destructive" disabled={processingAction === `delete-org-${organization.id}`}>
+                        {processingAction === `delete-org-${organization.id}` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                        Delete Organization
+                    </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Confirm Organization Deletion</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you absolutely sure you want to delete &quot;{organization.name}&quot;? This action cannot be undone. All documents, member associations, and pending invitations for this organization will be permanently removed.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={processingAction === `delete-org-${organization.id}`}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={handleDeleteOrganization}
+                            disabled={processingAction === `delete-org-${organization.id}`}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            {processingAction === `delete-org-${organization.id}` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            Yes, Delete Organization
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
             <p className="text-xs text-destructive mt-1">This action cannot be undone.</p>
           </CardContent>
         </Card>

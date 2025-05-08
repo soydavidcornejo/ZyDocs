@@ -9,7 +9,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import type { DocumentNode } from "@/types/document";
-import { FileText, Folder, ChevronRight, Dot } from 'lucide-react'; 
+import { FileText, Folder, Dot } from 'lucide-react'; // Removed ChevronRight
 
 interface DocumentTreeProps {
   nodes: DocumentNode[];
@@ -39,7 +39,7 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
       return <Folder className="h-4 w-4 mr-2 text-muted-foreground" />; 
     }
     switch (type) {
-      case 'space': 
+      case 'space': // This case might be obsolete if only 'page' type is used
         return <Folder className="h-4 w-4 mr-2 text-muted-foreground" />;
       case 'page':
         return <FileText className="h-4 w-4 mr-2 text-muted-foreground" />;
@@ -54,8 +54,6 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
     setExpandedItems(value);
   };
 
-  // Removed internal useEffect for ancestor expansion as it's now handled by the parent component.
-
   return (
     <Accordion 
         type="multiple" 
@@ -66,6 +64,7 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
       {nodes.map((node) => (
         <AccordionItem key={node.id} value={getItemValue(node)} className="border-none">
           <AccordionTrigger 
+            asChild={!!(node.children && node.children.length > 0)} // Pass asChild only if there are children
             className={`py-1.5 px-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md text-sm 
             ${currentDocumentId === node.id ? 'bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90 hover:text-sidebar-primary-foreground' : 'text-sidebar-foreground'}
             ${level > 0 ? `pl-${(level * 2) + 2}` : ''}
@@ -74,10 +73,8 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
              <Link href={`${basePath}/${node.id}`} className="flex flex-1 items-center" onClick={onSelectDocument ? () => onSelectDocument(node.id): undefined}>
                 {getIcon(node.type, !!node.children && node.children.length > 0)}
                 <span className="truncate flex-1 text-left">{node.name}</span>
+                 {/* Chevron is now part of AccordionTrigger itself when not asChild or handled by child if asChild */}
               </Link>
-              {node.children && node.children.length > 0 && (
-                <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-90 ml-auto" />
-              )}
           </AccordionTrigger>
           {node.children && node.children.length > 0 && (
             <AccordionContent className="pl-0 pt-0 pb-0">
@@ -97,4 +94,3 @@ export const DocumentTree: React.FC<DocumentTreeProps> = ({
     </Accordion>
   );
 };
-

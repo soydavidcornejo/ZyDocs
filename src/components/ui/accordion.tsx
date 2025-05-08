@@ -28,7 +28,7 @@ const AccordionTrigger = React.forwardRef<
     <AccordionPrimitive.Trigger
       ref={ref}
       className={cn(
-        "flex flex-1 items-center justify-between py-4 font-medium transition-all hover:underline [&[data-state=open]>svg]:rotate-180",
+        "flex flex-1 items-center justify-between py-4 font-medium transition-all hover:underline [&[data-state=open]>svg.accordion-chevron]:rotate-180", // Added class to target chevron specifically
         className
       )}
       asChild={asChild}
@@ -39,7 +39,8 @@ const AccordionTrigger = React.forwardRef<
       ) : (
         <>
           {children}
-          <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-200" />
+          {/* Ensure ChevronDown is only rendered when asChild is false, or handle it within the child if asChild is true */}
+          <ChevronDown className="h-4 w-4 shrink-0 transition-transform duration-200 accordion-chevron" />
         </>
       )}
     </AccordionPrimitive.Trigger>
